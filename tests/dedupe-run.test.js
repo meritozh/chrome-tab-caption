@@ -155,6 +155,34 @@ describe('runAutoDedupe', () => {
     assert.equal(tabsApi._tabs.size, 2);
   });
 
+  it('skips close when a tab navigates away before remove', async () => {
+    const { tabsApi, windowsApi } = makeChromeApis([
+      { id: 1, windowId: 1, url: 'https://nav.test/old', lastAccessed: 1 },
+      { id: 2, windowId: 2, url: 'https://nav.test/old', lastAccessed: 9, active: true },
+    ]);
+    const originalGet = tabsApi.get.bind(tabsApi);
+    let getCount = 0;
+    tabsApi.get = async (id) => {
+      getCount += 1;
+      const tab = await originalGet(id);
+      // After first pair of freshness reads, tab 1 has navigated away.
+      if (id === 1 && getCount > 2) {
+        return { ...tab, url: 'https://nav.test/elsewhere' };
+      }
+      return tab;
+    };
+    const result = await runAutoDedupe({
+      config: { autoDedupeEnabled: true, dedupeMode: 'auto-close-older' },
+      closingTabIds: new Set(),
+      tabsApi,
+      windowsApi,
+      broadcast: false,
+      probeUnload: false,
+    });
+    assert.equal(result.closed, 0);
+    assert.equal(tabsApi._tabs.size, 2);
+  });
+
   it('serializes overlapping runAutoDedupe calls', async () => {
     const { tabsApi, windowsApi } = makeChromeApis([
       { id: 1, windowId: 1, url: 'https://race.test/', lastAccessed: 1 },

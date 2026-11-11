@@ -12,6 +12,7 @@ import { planAutoCloseOlder } from '../shared/dedupe-match.js';
 import { suppressClosedRemove } from '../shared/suppress-closed.js';
 import { probeBeforeUnloadRisk } from '../shared/beforeunload-probe.js';
 import { tabLooksUnsaved } from '../shared/reclaim-policy.js';
+import { normalizeUrlKey } from '../shared/url-normalize.js';
 
 /** @type {Promise<unknown>} */
 let dedupeGate = Promise.resolve();
@@ -113,10 +114,28 @@ async function runAutoDedupeUnlocked(opts = {}) {
     }
   }
 
-  const plans = planAutoCloseOlder(tabs, {
-    closingTabIds,
+  const normalizeOpts = {
     stripHash: config.urlNormalizeStripHash !== false,
     stripTracking: config.urlNormalizeStripTrackingParams !== false,
+  };
+
+  // Re-query after probes — URLs may have changed during await.
+  try {
+    tabs = await tabsApi.query({});
+  } catch (err) {
+    return {
+      closed: 0,
+      kept: 0,
+      groups: 0,
+      stub: false,
+      skipped: 'requeryFailed',
+      errors: [String(err?.message || err)],
+    };
+  }
+
+  const plans = planAutoCloseOlder(tabs, {
+    closingTabIds,
+    ...normalizeOpts,
     beforeUnloadRiskIds,
   });
 
@@ -145,13 +164,37 @@ async function runAutoDedupeUnlocked(opts = {}) {
         continue;
       }
 
+      // Fresh URL check — skip if either tab navigated away during probe/plan.
+      const stillDup = await urlsStillMatch(keepId, dupId, plan.urlKey, tabsApi, normalizeOpts);
+      if (!stillDup.ok) {
+        continue;
+      }
+
       // Mark before activate so concurrent work sees the suppress set.
       closingTabIds.add(dupId);
 
-      const activated = await activateSurvivor(keepId, plan.keep.windowId, tabsApi, windowsApi);
+      const activated = await activateSurvivor(
+        keepId,
+        stillDup.keepWindowId ?? plan.keep.windowId,
+        tabsApi,
+        windowsApi,
+      );
       if (!activated.ok) {
         closingTabIds.delete(dupId);
         errors.push(activated.error || `activate failed for keep ${keepId}`);
+        continue;
+      }
+
+      // Re-check after activate (focus can race with navigation).
+      const stillDupAfter = await urlsStillMatch(
+        keepId,
+        dupId,
+        plan.urlKey,
+        tabsApi,
+        normalizeOpts,
+      );
+      if (!stillDupAfter.ok) {
+        closingTabIds.delete(dupId);
         continue;
       }
 
@@ -173,8 +216,8 @@ async function runAutoDedupeUnlocked(opts = {}) {
           keepTabId: keepId,
           closedTabId: dupId,
           urlKey: plan.urlKey,
-          keepWindowId: plan.keep.windowId,
-          closedWindowId: dup.windowId,
+          keepWindowId: stillDupAfter.keepWindowId ?? plan.keep.windowId,
+          closedWindowId: stillDupAfter.dupWindowId ?? dup.windowId,
         },
       };
       const logged = activityLog?.push?.(entry);
@@ -191,6 +234,36 @@ async function runAutoDedupeUnlocked(opts = {}) {
     stub: false,
     errors: errors.length ? errors : undefined,
   };
+}
+
+/**
+ * Confirm keep + dup still share the planned normalized URL (post-probe freshness).
+ * @param {number} keepId
+ * @param {number} dupId
+ * @param {string} urlKey
+ * @param {typeof chrome.tabs} tabsApi
+ * @param {{ stripHash?: boolean, stripTracking?: boolean }} normalizeOpts
+ */
+async function urlsStillMatch(keepId, dupId, urlKey, tabsApi, normalizeOpts) {
+  if (!tabsApi?.get) {
+    return { ok: true };
+  }
+  try {
+    const [keepTab, dupTab] = await Promise.all([tabsApi.get(keepId), tabsApi.get(dupId)]);
+    if (tabLooksUnsaved(dupTab)) return { ok: false, reason: 'dupUnsaved' };
+    const keepKey = normalizeUrlKey(keepTab?.url || '', normalizeOpts);
+    const dupKey = normalizeUrlKey(dupTab?.url || '', normalizeOpts);
+    if (!keepKey || !dupKey || keepKey !== urlKey || dupKey !== urlKey) {
+      return { ok: false, reason: 'urlChanged' };
+    }
+    return {
+      ok: true,
+      keepWindowId: keepTab.windowId,
+      dupWindowId: dupTab.windowId,
+    };
+  } catch {
+    return { ok: false, reason: 'missing' };
+  }
 }
 
 /**

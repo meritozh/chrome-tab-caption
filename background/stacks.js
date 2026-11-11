@@ -298,10 +298,12 @@ export async function maybeReclaim(opts) {
     }
 
     const closed = await suppressClosedRemove(tab.id, closingTabIds, tabsApi);
-    if (!closed.ok) {
-      // Roll back stack entry — tab still open.
+    if (!closed.ok || closed.alreadyClosed) {
+      // Roll back — we did not close this tab (failure or someone else did).
       stackStore.remove(record.id);
-      errors.push(closed.error || `failed to close ${tab.id}`);
+      if (!closed.ok) {
+        errors.push(closed.error || `failed to close ${tab.id}`);
+      }
       continue;
     }
     reclaimed += 1;
