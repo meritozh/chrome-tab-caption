@@ -21,6 +21,7 @@ import {
 import { formatOrganizeCancelMessage } from '../shared/organize-cancel.js';
 import { runSearchQuery } from './search.js';
 import { maybeReclaim, recallStack, exportOrDiscardStacks } from './stacks.js';
+import { buildOverflowPending } from '../shared/reclaim-policy.js';
 
 /** @type {TopicCacheLru} */
 let topicCache = new TopicCacheLru(DEFAULT_CONFIG.cacheSize);
@@ -95,6 +96,22 @@ async function hydrateFromStorage() {
       pending && typeof pending === 'object' && pending.needsUserAction ? pending : null;
   } catch {
     // session storage may be unavailable
+  }
+  // Over-capacity after hydrate (e.g. stackSize shrunk) — warn, never silent trim.
+  if (stackStore.size > stackStore.maxSize) {
+    const pending = buildOverflowPending({
+      size: stackStore.size,
+      maxSize: stackStore.maxSize,
+      blockedIncoming: 0,
+      reason: 'over_capacity',
+    });
+    await setOverflowPending(pending);
+  } else if (overflowPending?.needsUserAction && stackStore.size <= stackStore.maxSize) {
+    // Capacity raised or records already trimmed — clear stale gate.
+    const stillBlocked = Number(overflowPending.blocked) > 0 && stackStore.size >= stackStore.maxSize;
+    if (!stillBlocked) {
+      await setOverflowPending(null);
+    }
   }
 }
 
@@ -277,20 +294,20 @@ function onMessage(message, sender, sendResponse) {
         topicCache._evict();
         await persistTopicCache(topicCache);
         stackStore.maxSize = Math.max(1, Number(next.stackSize) || DEFAULT_CONFIG.stackSize);
-        // Soft-trim only when user shrinks stackSize below current count after explicit save —
-        // runtime reclaim still uses warn→export/discard for growth overflow.
+        // Never silent-trim on shrink — warn → export/discard. Clear gate when capacity fits.
         if (stackStore.size > stackStore.maxSize) {
-          await setOverflowPending({
-            needsUserAction: true,
-            reason: 'at_capacity',
-            blocked: stackStore.size - stackStore.maxSize,
-            stackSize: stackStore.maxSize,
-            stackCount: stackStore.size,
-            at: Date.now(),
+          const pending = buildOverflowPending({
+            size: stackStore.size,
+            maxSize: stackStore.maxSize,
+            blockedIncoming: 0,
+            reason: 'over_capacity',
           });
+          await setOverflowPending(pending);
           chrome.runtime
-            .sendMessage({ type: MSG.STACKS_OVERFLOW_WARN, ...overflowPending })
+            .sendMessage({ type: MSG.STACKS_OVERFLOW_WARN, ...pending })
             .catch(() => {});
+        } else if (overflowPending?.needsUserAction) {
+          await setOverflowPending(null);
         }
         await persistStackRecords(stackStore);
         chrome.runtime.sendMessage({ type: MSG.CONFIG_UPDATED }).catch(() => {});

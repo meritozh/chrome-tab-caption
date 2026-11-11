@@ -114,7 +114,12 @@ describe('maybeReclaim integration (mocked tabs)', () => {
       reclaimedAt: 2,
       lastAccessedAt: 2,
     });
-    let pending = { needsUserAction: true, blocked: 1 };
+    let pending = {
+      needsUserAction: true,
+      excess: 0,
+      blocked: 1,
+      reason: 'at_capacity',
+    };
     const result = await exportOrDiscardStacks({
       action: 'export',
       stackStore: store,
@@ -122,7 +127,6 @@ describe('maybeReclaim integration (mocked tabs)', () => {
       setOverflowPending: async (p) => {
         pending = p;
       },
-      count: 1,
     });
     assert.equal(result.ok, true);
     assert.equal(result.discarded, 1);
@@ -130,6 +134,51 @@ describe('maybeReclaim integration (mocked tabs)', () => {
     assert.match(result.exportJson, /https:\/\/a\.test/);
     assert.equal(pending, null);
     assert.equal(store.size, 1);
+  });
+
+  it('shrink overflow discards only the excess (not 2x)', async () => {
+    const store = new StackRecordStore(2);
+    // Force over capacity the way SET_CONFIG shrink does (push then lower maxSize).
+    store.push({
+      id: 'a',
+      url: 'https://a.test',
+      title: 'A',
+      reclaimedAt: 1,
+      lastAccessedAt: 1,
+    });
+    store.push({
+      id: 'b',
+      url: 'https://b.test',
+      title: 'B',
+      reclaimedAt: 2,
+      lastAccessedAt: 2,
+    });
+    store.push({
+      id: 'c',
+      url: 'https://c.test',
+      title: 'C',
+      reclaimedAt: 3,
+      lastAccessedAt: 3,
+    });
+    store.maxSize = 2;
+    assert.equal(store.size, 3);
+    let pending = {
+      needsUserAction: true,
+      reason: 'over_capacity',
+      excess: 1,
+      blocked: 0,
+    };
+    const result = await exportOrDiscardStacks({
+      action: 'discard',
+      stackStore: store,
+      overflowPending: pending,
+      setOverflowPending: async (p) => {
+        pending = p;
+      },
+    });
+    assert.equal(result.discarded, 1);
+    assert.equal(store.size, 2);
+    assert.equal(pending, null);
   });
 
   it('recallStack creates a tab and removes the record', async () => {

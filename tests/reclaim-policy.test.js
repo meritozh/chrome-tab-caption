@@ -8,6 +8,7 @@ import {
   selectReclaimTargets,
   evaluateStackCapacity,
   slotsToFreeForOverflow,
+  buildOverflowPending,
 } from '../shared/reclaim-policy.js';
 
 describe('reclaim exclusions', () => {
@@ -105,6 +106,22 @@ describe('reclaim selection (least-recently-accessed)', () => {
       [1, 2],
     );
   });
+
+  it('treats missing lastAccessed as recent (Chrome <121), not oldest', () => {
+    const tabs = [
+      { id: 1, url: 'https://a.test', lastAccessed: 10 },
+      { id: 2, url: 'https://b.test' }, // missing — must not sort as 0
+      { id: 3, url: 'https://c.test', lastAccessed: 20, active: true },
+    ];
+    const picked = selectReclaimTargets(tabs, {
+      maxOpenTabs: 2,
+      protectActiveTabId: 3,
+    });
+    assert.deepEqual(
+      picked.map((t) => t.id),
+      [1],
+    );
+  });
 });
 
 describe('stack overflow policy', () => {
@@ -134,9 +151,33 @@ describe('stack overflow policy', () => {
     assert.equal(r.reason, 'partial');
   });
 
-  it('computes discard/export slot count', () => {
-    assert.equal(slotsToFreeForOverflow({ size: 500, maxSize: 500, neededSlots: 3 }), 3);
-    assert.equal(slotsToFreeForOverflow({ size: 499, maxSize: 500, neededSlots: 1 }), 1);
-    assert.equal(slotsToFreeForOverflow({ size: 490, maxSize: 500, neededSlots: 5 }), 5);
+  it('computes discard/export slot count without double-counting shrink excess', () => {
+    // Shrink: size 600, max 500 → free exactly 100 when incomingSlots=0
+    assert.equal(slotsToFreeForOverflow({ size: 600, maxSize: 500, incomingSlots: 0 }), 100);
+    // At capacity wanting 3 new reclaim slots
+    assert.equal(slotsToFreeForOverflow({ size: 500, maxSize: 500, incomingSlots: 3 }), 3);
+    assert.equal(slotsToFreeForOverflow({ size: 499, maxSize: 500, incomingSlots: 1 }), 0);
+    assert.equal(slotsToFreeForOverflow({ size: 490, maxSize: 500, incomingSlots: 5 }), 0);
+    // Shrink excess + 2 blocked reclaim → free 102 (not 200)
+    assert.equal(slotsToFreeForOverflow({ size: 600, maxSize: 500, incomingSlots: 2 }), 102);
+  });
+
+  it('buildOverflowPending separates excess from blocked incoming', () => {
+    const shrink = buildOverflowPending({
+      size: 600,
+      maxSize: 500,
+      blockedIncoming: 0,
+      reason: 'over_capacity',
+    });
+    assert.equal(shrink.excess, 100);
+    assert.equal(shrink.blocked, 0);
+    const reclaim = buildOverflowPending({
+      size: 500,
+      maxSize: 500,
+      blockedIncoming: 3,
+      reason: 'at_capacity',
+    });
+    assert.equal(reclaim.excess, 0);
+    assert.equal(reclaim.blocked, 3);
   });
 });

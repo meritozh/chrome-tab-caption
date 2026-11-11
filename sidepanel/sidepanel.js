@@ -612,8 +612,15 @@ function showStacksOverflow(pending) {
   if (summary) {
     const count = pending.stackCount ?? '—';
     const max = pending.stackSize ?? '—';
-    const blocked = pending.blocked ?? 1;
-    summary.textContent = `Archive at capacity (${count}/${max}). Choose export or discard to free space for ${blocked} more reclaim(s). Reclaim is paused until then.`;
+    const excess = Number(pending.excess) || 0;
+    const blocked = Number(pending.blocked) || 0;
+    const freeHint =
+      excess > 0 && blocked === 0
+        ? `Archive over capacity by ${excess} (${count}/${max}). Export or discard oldest to get back within the limit.`
+        : `Archive at capacity (${count}/${max}). Choose export or discard to free space${
+            blocked > 0 ? ` for ${blocked} more reclaim(s)` : ''
+          }. Reclaim is paused until then.`;
+    summary.textContent = freeHint;
   }
 }
 

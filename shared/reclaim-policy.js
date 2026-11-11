@@ -86,12 +86,20 @@ export function selectReclaimTargets(tabs, opts) {
   const limit = Math.min(excess, opts?.limit ?? excess);
   if (limit <= 0) return [];
 
+  // lastAccessed is Chrome 121+; missing values must not sort as oldest (0).
+  // Treat unknown age as "recent" so we prefer tabs with known old timestamps.
+  const recency = (tab) => {
+    const n = Number(tab?.lastAccessed);
+    if (Number.isFinite(n) && n > 0) return n;
+    return Number.MAX_SAFE_INTEGER;
+  };
+
   const candidates = open
     .filter((t) => isReclaimCandidate(t, { beforeUnloadRiskIds: opts?.beforeUnloadRiskIds }))
     .slice()
     .sort((a, b) => {
-      const la = Number(a.lastAccessed) || 0;
-      const lb = Number(b.lastAccessed) || 0;
+      const la = recency(a);
+      const lb = recency(b);
       if (la !== lb) return la - lb; // least-recently-accessed first
       return (a.id ?? 0) - (b.id ?? 0);
     });
@@ -171,16 +179,48 @@ export function evaluateStackCapacity({ size, maxSize, incoming = 1 }) {
 }
 
 /**
- * How many oldest records to free so `neededSlots` can be accepted (and size ≤ max).
+ * How many oldest records to free so `incomingSlots` new records fit and size ≤ max.
+ * `incomingSlots` is capacity to free for *new* pushes — not the current excess alone.
+ * When already over max (config shrink), pass incomingSlots=0 to trim exactly to max.
+ *
  * @param {object} args
  * @param {number} args.size
  * @param {number} args.maxSize
- * @param {number} [args.neededSlots]
+ * @param {number} [args.incomingSlots]  new records to make room for (default 0)
  */
-export function slotsToFreeForOverflow({ size, maxSize, neededSlots = 1 }) {
+export function slotsToFreeForOverflow({ size, maxSize, incomingSlots = 0 }) {
   const max = Math.max(1, Number(maxSize) || 1);
   const current = Math.max(0, Number(size) || 0);
-  const need = Math.max(1, Number(neededSlots) || 1);
-  const over = Math.max(0, current + need - max);
-  return Math.max(need, over);
+  const incoming = Math.max(0, Number(incomingSlots) || 0);
+  // Freed so that (current - freed) + incoming <= max
+  return Math.max(0, current + incoming - max);
+}
+
+/**
+ * Build overflow-pending payload. Distinguishes shrink excess vs blocked reclaim.
+ * @param {object} args
+ * @param {number} args.size
+ * @param {number} args.maxSize
+ * @param {number} [args.blockedIncoming]  reclaim candidates that could not be accepted
+ * @param {'over_capacity' | 'at_capacity' | 'partial'} [args.reason]
+ */
+export function buildOverflowPending({ size, maxSize, blockedIncoming = 0, reason }) {
+  const max = Math.max(1, Number(maxSize) || 1);
+  const current = Math.max(0, Number(size) || 0);
+  const excess = Math.max(0, current - max);
+  const blocked = Math.max(0, Number(blockedIncoming) || 0);
+  const inferred =
+    reason ||
+    (excess > 0 ? 'over_capacity' : blocked > 0 ? 'at_capacity' : 'at_capacity');
+  return {
+    needsUserAction: true,
+    reason: inferred,
+    /** Records over maxSize (config shrink) — free this many to get ≤ max. */
+    excess,
+    /** Incoming reclaim slots still blocked — free this many *additional* after excess. */
+    blocked,
+    stackSize: max,
+    stackCount: current,
+    at: Date.now(),
+  };
 }

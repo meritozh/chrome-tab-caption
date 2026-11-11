@@ -14,6 +14,7 @@ import {
   selectReclaimTargets,
   evaluateStackCapacity,
   slotsToFreeForOverflow,
+  buildOverflowPending,
   isReclaimCandidate,
 } from '../shared/reclaim-policy.js';
 import { normalizeUrlKey, computeContentHash } from '../shared/url-normalize.js';
@@ -251,8 +252,12 @@ export async function maybeReclaim(opts) {
   const stackSize = Math.max(1, Number(config.stackSize) || 500);
   stackStore.maxSize = stackSize;
 
-  const active = tabs.find((t) => t.active);
-  const protectActiveTabId = typeof active?.id === 'number' ? active.id : undefined;
+  // Prefer the focused window's active tab (not an arbitrary window's .active).
+  const protectActiveTabId = await resolveFocusedActiveTabId(
+    tabs,
+    tabsApi,
+    opts.windowsApi ?? globalThis.chrome?.windows,
+  );
 
   // Probe unload risk only for sync-eligible candidates we might take (cap work).
   /** @type {Set<number>} */
@@ -287,14 +292,12 @@ export async function maybeReclaim(opts) {
   });
 
   if (capacity.accept <= 0) {
-    const pending = {
-      needsUserAction: true,
-      reason: capacity.reason,
-      blocked: capacity.blocked || targets.length,
-      stackSize,
-      stackCount: stackStore.size,
-      at: Date.now(),
-    };
+    const pending = buildOverflowPending({
+      size: stackStore.size,
+      maxSize: stackSize,
+      blockedIncoming: capacity.blocked || targets.length,
+      reason: capacity.reason === 'partial' ? 'partial' : 'at_capacity',
+    });
     await opts.setOverflowPending?.(pending);
     broadcastOverflow(pending);
     return { reclaimed: 0, overflow: true, overflowPending: pending, stub: false };
@@ -324,14 +327,12 @@ export async function maybeReclaim(opts) {
 
     const pushed = stackStore.tryPush(record);
     if (!pushed.accepted) {
-      const pending = {
-        needsUserAction: true,
+      const pending = buildOverflowPending({
+        size: stackStore.size,
+        maxSize: stackSize,
+        blockedIncoming: toReclaim.length - reclaimed,
         reason: 'at_capacity',
-        blocked: toReclaim.length - reclaimed,
-        stackSize,
-        stackCount: stackStore.size,
-        at: Date.now(),
-      };
+      });
       await opts.setOverflowPending?.(pending);
       broadcastOverflow(pending);
       break;
@@ -352,14 +353,12 @@ export async function maybeReclaim(opts) {
   }
 
   if (capacity.needsUserAction && capacity.blocked > 0) {
-    const pending = {
-      needsUserAction: true,
-      reason: capacity.reason,
-      blocked: capacity.blocked,
-      stackSize,
-      stackCount: stackStore.size,
-      at: Date.now(),
-    };
+    const pending = buildOverflowPending({
+      size: stackStore.size,
+      maxSize: stackSize,
+      blockedIncoming: capacity.blocked,
+      reason: capacity.reason === 'partial' ? 'partial' : 'at_capacity',
+    });
     await opts.setOverflowPending?.(pending);
     broadcastOverflow(pending);
     return {
@@ -376,6 +375,33 @@ export async function maybeReclaim(opts) {
 
 function excessCap(openCount, maxOpenTabs) {
   return Math.max(0, openCount - maxOpenTabs);
+}
+
+/**
+ * Protect the focused window's active tab when alternatives exist.
+ * @param {chrome.tabs.Tab[]} tabs
+ * @param {typeof chrome.tabs} [tabsApi]
+ * @param {typeof chrome.windows} [windowsApi]
+ * @returns {Promise<number | undefined>}
+ */
+export async function resolveFocusedActiveTabId(tabs, tabsApi, windowsApi) {
+  try {
+    if (windowsApi?.getLastFocused) {
+      const focused = await windowsApi.getLastFocused();
+      if (typeof focused?.id === 'number' && tabsApi?.query) {
+        const [active] = await tabsApi.query({ active: true, windowId: focused.id });
+        if (typeof active?.id === 'number') return active.id;
+      }
+      if (typeof focused?.id === 'number') {
+        const inFocused = tabs.find((t) => t.windowId === focused.id && t.active);
+        if (typeof inFocused?.id === 'number') return inFocused.id;
+      }
+    }
+  } catch {
+    // fall through
+  }
+  const active = tabs.find((t) => t.active);
+  return typeof active?.id === 'number' ? active.id : undefined;
 }
 
 /**
@@ -474,16 +500,24 @@ export async function exportOrDiscardStacks(opts) {
   const store = opts.stackStore;
   if (!store) return { ok: false, error: 'stack store unavailable' };
 
-  const needed = Math.max(
-    1,
-    Number(opts.count) ||
-      Number(opts.overflowPending?.blocked) ||
-      1,
-  );
+  const pending = opts.overflowPending;
+  // Shrink excess and blocked reclaim are separate — do not double-count.
+  const excess =
+    typeof pending?.excess === 'number'
+      ? Math.max(0, pending.excess)
+      : Math.max(0, store.size - store.maxSize);
+  const blockedIncoming =
+    typeof opts.count === 'number'
+      ? Math.max(0, opts.count)
+      : Math.max(0, Number(pending?.blocked) || 0);
+  // Default: free enough for one new reclaim when at exact capacity with no pending shape.
+  const incomingSlots =
+    excess > 0 || blockedIncoming > 0 ? blockedIncoming : 1;
+
   const freeCount = slotsToFreeForOverflow({
     size: store.size,
     maxSize: store.maxSize,
-    neededSlots: needed,
+    incomingSlots,
   });
 
   let exportJson = null;

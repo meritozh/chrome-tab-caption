@@ -170,10 +170,7 @@ export async function loadStackRecords(maxSize = 500, storage = globalThis.chrom
       records: Array.isArray(raw.records) ? raw.records : [],
     });
     loaded.maxSize = Math.max(1, maxSize);
-    // Soft-trim only on hydrate if config shrunk — prefer warn path at runtime.
-    if (loaded.size > loaded.maxSize) {
-      loaded.discardOldest(loaded.size - loaded.maxSize);
-    }
+    // Keep over-capacity records in memory — warn → export/discard (never silent trim).
     return loaded;
   }
   return store;

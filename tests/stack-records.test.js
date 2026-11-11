@@ -81,4 +81,20 @@ describe('StackRecordStore capacity', () => {
     assert.equal(loaded.list()[0].groupTitle, 'Docs');
     assert.ok(storage.local._data[STORAGE_KEYS.STACK_RECORDS]);
   });
+
+  it('hydrate keeps over-capacity records (no silent discard)', async () => {
+    const storage = mockStorage({
+      [STORAGE_KEYS.STACK_RECORDS]: {
+        maxSize: 10,
+        records: [
+          createStackRecord({ id: 'a', url: 'https://a.test', title: 'A' }),
+          createStackRecord({ id: 'b', url: 'https://b.test', title: 'B' }),
+          createStackRecord({ id: 'c', url: 'https://c.test', title: 'C' }),
+        ],
+      },
+    });
+    const loaded = await loadStackRecords(1, storage);
+    assert.equal(loaded.maxSize, 1);
+    assert.equal(loaded.size, 3);
+  });
 });
