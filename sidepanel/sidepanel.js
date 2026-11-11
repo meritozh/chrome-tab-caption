@@ -6,6 +6,11 @@
 import { MSG } from '../shared/constants.js';
 import { sendToBackground, onBackgroundBroadcast } from '../shared/messages.js';
 import { requestOrganizePermissions } from '../shared/permissions.js';
+import {
+  formatOrganizeCancelMessage,
+  isPreviewOnlyCancel,
+  shouldApplyOrganizeCompletion,
+} from '../shared/organize-cancel.js';
 
 const views = {
   main: document.getElementById('view-main'),
@@ -60,10 +65,25 @@ const scopeSelect = /** @type {HTMLSelectElement | null} */ (document.getElement
 let pendingPreview = null;
 let organizeBusy = false;
 
+/**
+ * Generation token — Cancel bumps this so in-flight Confirm / progress cannot update UI.
+ * @type {number}
+ */
+let organizeRunId = 0;
+/** @type {'idle' | 'preview' | 'confirming' | 'running' | 'cancelling'} */
+let organizePhase = 'idle';
+/** @type {string | null} */
+let activeJobId = null;
+/** Last known LLM calls started for this run (from progress / job result). */
+let lastLlmCallsAttempted = 0;
+let lastClassified = 0;
+
 function setBusy(busy) {
   organizeBusy = busy;
   if (organizeBtn) organizeBtn.disabled = busy;
   if (confirmBtn) confirmBtn.disabled = busy;
+  // Cancel stays enabled so the user can abort confirming / running jobs.
+  if (cancelBtn) cancelBtn.disabled = false;
   // Keep scope locked while a preview is pending so Confirm matches what was reviewed.
   if (scopeSelect) scopeSelect.disabled = busy || Boolean(pendingPreview);
 }
@@ -72,6 +92,12 @@ function hidePreview() {
   pendingPreview = null;
   if (previewPanel) previewPanel.hidden = true;
   if (scopeSelect && !organizeBusy) scopeSelect.disabled = false;
+}
+
+function setOrganizeIdle() {
+  organizePhase = 'idle';
+  activeJobId = null;
+  setBusy(false);
 }
 
 /**
@@ -100,6 +126,7 @@ function renderOrganizePreview(preview, meta) {
     llmProvider: meta.llmProvider || '',
     hasApiKey: Boolean(meta.hasApiKey),
   };
+  organizePhase = 'preview';
   if (!previewPanel) return;
   previewPanel.hidden = false;
   if (scopeSelect) {
@@ -126,6 +153,7 @@ function renderOrganizePreview(preview, meta) {
 organizeBtn?.addEventListener('click', async () => {
   if (organizeBusy) return;
   setBusy(true);
+  organizePhase = 'idle';
   organizeStatus.textContent = 'Building privacy preview…';
   const scope = scopeSelect?.value === 'current' ? 'current' : 'all';
   const windowId = await getPanelWindowId();
@@ -140,6 +168,7 @@ organizeBtn?.addEventListener('click', async () => {
   if (!res?.ok) {
     organizeStatus.textContent = res?.error || 'Preview failed';
     hidePreview();
+    organizePhase = 'idle';
     return;
   }
   renderOrganizePreview(res.preview, {
@@ -152,14 +181,60 @@ organizeBtn?.addEventListener('click', async () => {
   organizeStatus.textContent = 'Review fields, then confirm to classify cache misses.';
 });
 
-cancelBtn?.addEventListener('click', () => {
+cancelBtn?.addEventListener('click', async () => {
+  const phase = organizePhase;
+  const cancelledRunId = organizeRunId;
+  // Invalidate any in-flight Confirm handler (permission await or GROUP_TABS).
+  organizeRunId += 1;
+
+  if (isPreviewOnlyCancel(phase)) {
+    hidePreview();
+    setOrganizeIdle();
+    lastLlmCallsAttempted = 0;
+    lastClassified = 0;
+    organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
+    return;
+  }
+
+  if (phase === 'confirming') {
+    // Permission step — no LLM yet; mark this run cancelled in SW in case GROUP_TABS races.
+    hidePreview();
+    setOrganizeIdle();
+    lastLlmCallsAttempted = 0;
+    lastClassified = 0;
+    organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
+    sendToBackground(MSG.CANCEL_GROUP, { clientRunId: cancelledRunId }).catch(() => {});
+    return;
+  }
+
+  if (phase === 'running' || phase === 'cancelling') {
+    organizePhase = 'cancelling';
+    organizeStatus.textContent = 'Cancelling…';
+    hidePreview();
+    await sendToBackground(MSG.CANCEL_GROUP, { clientRunId: cancelledRunId }).catch(() => {});
+    // Confirm handler will refine copy from the cancelled job result when it returns;
+    // show best-known progress counts immediately (never invent "no LLM" if we saw calls).
+    organizeStatus.textContent = formatOrganizeCancelMessage({
+      llmCallsAttempted: lastLlmCallsAttempted,
+      classified: lastClassified,
+    });
+    setOrganizeIdle();
+    return;
+  }
+
   hidePreview();
-  organizeStatus.textContent = 'Organize cancelled — no LLM calls.';
+  setOrganizeIdle();
+  organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
 });
 
 confirmBtn?.addEventListener('click', async () => {
   if (organizeBusy || !pendingPreview) return;
   const pending = pendingPreview;
+  const runId = (organizeRunId += 1);
+  lastLlmCallsAttempted = 0;
+  lastClassified = 0;
+  activeJobId = null;
+  organizePhase = 'confirming';
   setBusy(true);
   organizeStatus.textContent = 'Organizing…';
 
@@ -172,22 +247,77 @@ confirmBtn?.addEventListener('click', async () => {
     includeExtractHosts: true,
     includeAllProviderDefaults: true,
   });
+
+  if (runId !== organizeRunId) {
+    // Cancelled during permission prompt — do not start GROUP_TABS.
+    return;
+  }
+
   if (!allowed) {
     setBusy(false);
+    organizePhase = 'preview';
     if (scopeSelect) scopeSelect.disabled = true;
     organizeStatus.textContent =
       'Host permission denied. Grant LLM + page access, then Confirm again.';
     return;
   }
 
+  organizePhase = 'running';
+  if (runId !== organizeRunId) {
+    // Cancelled after permission grant, before GROUP_TABS dispatch.
+    return;
+  }
   const res = await sendToBackground(MSG.GROUP_TABS, {
     scope: pending.scope,
     windowId: pending.windowId,
     confirmed: true,
+    clientRunId: runId,
   }).catch((err) => ({ ok: false, error: String(err) }));
+
+  const stillActive = shouldApplyOrganizeCompletion({
+    runId,
+    activeRunId: organizeRunId,
+    cancelRequested: false,
+  });
+
+  if (!stillActive) {
+    // Cancel already updated status; absorb stale completion.
+    if (res?.cancelled) {
+      lastLlmCallsAttempted = Number(res.llmCallsAttempted) || lastLlmCallsAttempted;
+      lastClassified = Number(res.classified) || lastClassified;
+      organizeStatus.textContent = formatOrganizeCancelMessage({
+        llmCallsAttempted: lastLlmCallsAttempted,
+        classified: lastClassified,
+      });
+      if (Array.isArray(res.logical) && res.logical.length) {
+        renderLogicalTopics(res.logical);
+      }
+    }
+    setOrganizeIdle();
+    return;
+  }
+
+  if (res?.cancelled) {
+    hidePreview();
+    lastLlmCallsAttempted = Number(res.llmCallsAttempted) || 0;
+    lastClassified = Number(res.classified) || 0;
+    organizeStatus.textContent =
+      res.message ||
+      formatOrganizeCancelMessage({
+        llmCallsAttempted: lastLlmCallsAttempted,
+        classified: lastClassified,
+      });
+    if (Array.isArray(res.logical) && res.logical.length) {
+      renderLogicalTopics(res.logical);
+    }
+    setOrganizeIdle();
+    return;
+  }
+
   setBusy(false);
   if (!res?.ok) {
     // Keep preview open so Confirm retains a user-gesture path (e.g. needsPermission).
+    organizePhase = 'preview';
     if (scopeSelect) scopeSelect.disabled = true;
     organizeStatus.textContent = res?.needsPermission
       ? `${res.error || 'Host permission missing.'} Confirm again after granting access.`
@@ -195,6 +325,7 @@ confirmBtn?.addEventListener('click', async () => {
     return;
   }
   hidePreview();
+  organizePhase = 'idle';
   const topics = res.logical?.length ?? 0;
   const applied = res.physical?.applied ?? 0;
   organizeStatus.textContent = `Done — ${topics} logical topics, ${applied} physical groups, ${res.classified ?? 0} classified.`;
@@ -203,12 +334,41 @@ confirmBtn?.addEventListener('click', async () => {
 
 onBackgroundBroadcast((message) => {
   if (message.type === MSG.CONFIG_UPDATED && pendingPreview) {
+    organizeRunId += 1;
     hidePreview();
+    setOrganizeIdle();
     organizeStatus.textContent =
       'Settings changed — run Organize again to refresh the privacy preview.';
     return;
   }
   if (message.type !== MSG.GROUP_PROGRESS) return;
+
+  // Ignore progress for superseded / cancelled runs.
+  if (organizePhase === 'idle' || organizePhase === 'preview' || organizePhase === 'confirming') {
+    return;
+  }
+  if (typeof message.jobId === 'string') {
+    if (!activeJobId) activeJobId = message.jobId;
+    else if (activeJobId !== message.jobId) return;
+  }
+  if (typeof message.llmCallsAttempted === 'number') {
+    lastLlmCallsAttempted = message.llmCallsAttempted;
+  }
+  if (typeof message.classified === 'number') {
+    lastClassified = message.classified;
+  }
+  if (message.phase === 'cancelled') {
+    organizeStatus.textContent =
+      typeof message.message === 'string'
+        ? message.message
+        : formatOrganizeCancelMessage({
+            llmCallsAttempted: lastLlmCallsAttempted,
+            classified: lastClassified,
+          });
+    return;
+  }
+  // Suppress stale "Done" if user already cancelled.
+  if (organizePhase === 'cancelling') return;
   if (typeof message.message === 'string') {
     organizeStatus.textContent = message.message;
   }

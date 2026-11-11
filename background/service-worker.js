@@ -16,6 +16,7 @@ import {
   buildGroupPayloadPreview,
   groupTabsOnDemand,
 } from './grouping.js';
+import { formatOrganizeCancelMessage } from '../shared/organize-cancel.js';
 
 /** @type {TopicCacheLru} */
 let topicCache = new TopicCacheLru(DEFAULT_CONFIG.cacheSize);
@@ -36,6 +37,18 @@ const pendingTabSync = new Map();
 
 /** @type {Promise<void> | null} */
 let hydratePromise = null;
+
+/**
+ * Active on-demand Organize job — Cancel aborts via AbortController.
+ * @type {{ jobId: string, controller: AbortController, clientRunId: number | null } | null}
+ */
+let activeOrganizeJob = null;
+
+/**
+ * Side-panel run ids cancelled before GROUP_TABS registered the job (permission / race).
+ * @type {Set<number>}
+ */
+const cancelledClientRunIds = new Set();
 
 async function initPanelBehavior() {
   try {
@@ -227,6 +240,34 @@ function onMessage(message, sender, sendResponse) {
         sendResponse({ ok: true, preview });
         break;
       }
+      case MSG.CANCEL_GROUP: {
+        const clientRunId =
+          typeof message.clientRunId === 'number' ? message.clientRunId : null;
+        if (clientRunId != null) {
+          cancelledClientRunIds.add(clientRunId);
+          // Bound memory — keep only recent cancel marks.
+          if (cancelledClientRunIds.size > 32) {
+            const first = cancelledClientRunIds.values().next().value;
+            cancelledClientRunIds.delete(first);
+          }
+        }
+        const match =
+          activeOrganizeJob &&
+          (clientRunId == null || activeOrganizeJob.clientRunId === clientRunId);
+        if (match && activeOrganizeJob) {
+          const { jobId, controller } = activeOrganizeJob;
+          controller.abort();
+          sendResponse({ ok: true, cancelled: true, jobId, hadActiveJob: true });
+        } else {
+          sendResponse({
+            ok: true,
+            cancelled: clientRunId != null,
+            hadActiveJob: false,
+            preemptive: clientRunId != null,
+          });
+        }
+        break;
+      }
       case MSG.GROUP_TABS: {
         const config = await loadConfig();
         if (!message.confirmed) {
@@ -240,17 +281,65 @@ function onMessage(message, sender, sendResponse) {
         if (config.groupOnDemandOnly === false) {
           // Still never auto-group; flag is informational for Phase 2.
         }
+        const clientRunId =
+          typeof message.clientRunId === 'number' ? message.clientRunId : null;
+        // Cancel arrived during permission / before this handler registered the job.
+        if (clientRunId != null && cancelledClientRunIds.has(clientRunId)) {
+          cancelledClientRunIds.delete(clientRunId);
+          sendResponse({
+            ok: false,
+            cancelled: true,
+            llmCallsAttempted: 0,
+            classified: 0,
+            message: formatOrganizeCancelMessage({ llmCallsAttempted: 0 }),
+            logical: [],
+            assignments: [],
+            physical: { applied: 0, errors: [] },
+            stub: false,
+          });
+          break;
+        }
+        // Latest-wins: abort any prior Organize still refining.
+        if (activeOrganizeJob) {
+          activeOrganizeJob.controller.abort();
+          activeOrganizeJob = null;
+        }
+        const controller = new AbortController();
+        const jobId = `group-${Date.now()}`;
+        activeOrganizeJob = { jobId, controller, clientRunId };
+        // Re-check after registration — Cancel may have landed during loadConfig.
+        if (clientRunId != null && cancelledClientRunIds.has(clientRunId)) {
+          cancelledClientRunIds.delete(clientRunId);
+          controller.abort();
+        }
         const currentWindowId = await resolveCurrentWindowId(message, sender);
-        const result = await groupTabsOnDemand({
-          scope: message.scope === 'current' ? 'current' : 'all',
-          currentWindowId,
-          confirmed: true,
-          topicCache,
-          config,
-          llmOpts: { useMock: message.useMock === true },
-        });
+        let result;
+        try {
+          result = await groupTabsOnDemand({
+            scope: message.scope === 'current' ? 'current' : 'all',
+            currentWindowId,
+            confirmed: true,
+            topicCache,
+            config,
+            llmOpts: { useMock: message.useMock === true },
+            signal: controller.signal,
+            jobId,
+          });
+        } finally {
+          if (activeOrganizeJob?.jobId === jobId) {
+            activeOrganizeJob = null;
+          }
+          if (clientRunId != null) cancelledClientRunIds.delete(clientRunId);
+        }
         if (result.ok) {
           await rememberOrganizeState(result);
+        } else if (result.cancelled && Array.isArray(result.logical) && result.logical.length) {
+          // Keep partial logical topics from work completed before cancel.
+          await rememberOrganizeState({
+            logical: result.logical,
+            latestWinsAt: Date.now(),
+            latestWinsSource: 'extension-organize-cancelled',
+          });
         }
         sendResponse(result);
         break;
