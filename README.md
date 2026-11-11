@@ -1,78 +1,31 @@
 # chrome-tab-caption
 
-Manifest V3 Chrome extension that organizes tabs with **on-demand** LLM topic grouping, auto-dedupe, fuzzy search (with pinyin), and **Stacks** reclaim/recall.
+Chrome 标签管理扩展（MV3）— 按主题整理标签，不是字面「字幕」。
 
-> Product name says “caption”; the product is a **tab manager**, not literal captions.
+On-demand LLM topic grouping for Chrome tabs: organize when you ask, cache what you’ve classified, reclaim overflow into searchable Stacks.
 
-## Status
+## Features
 
-**Phase 2** — on-demand Organize with privacy preview, Anthropic Messages + OpenAI Responses-style LLM clients, `topicCache` hydrate (urlKey+contentHash LRU), logical cross-window topics + physical per-window `tabGroups`. Dedupe / Stacks / fuzzy search remain later phases.
+| | 中文 | English |
+|---|---|---|
+| **Organize** | Side Panel 一键按主题分组（跨窗口逻辑主题；物理 `tabGroups` 仍按窗口） | On-demand topic groups — logical topics across windows, physical groups per window |
+| **Cache** | `urlKey` + content hash LRU，避免重复打 LLM | Topic cache so the same page isn’t reclassified |
+| **Privacy** | 自配 endpoint；API key 仅存本地；发送前字段预览 | Your endpoint, local key, always preview payload fields |
+| **Roadmap** | 自动去重 · 拼音模糊搜索 · Stacks 回收/召回 | Auto-dedupe · fuzzy search (pinyin) · Stacks reclaim/recall |
 
-Architecture and Accepted decisions live in the project ADR (agent store / docs): `tab-manager-adr.md`. Engineering patterns borrowed from [smart-tab-pilot](https://github.com/BiuBiuHu/smart-tab-pilot) are limited to shell/orchestration (Side Panel, MSG table, logical≠physical groups, short excerpt caps, quick-pass → refine + progress). Product conflicts (always-on auto-group, `storage.sync` keys, always-on content scripts, nav-graph clustering, chat/completions-only, Nano-required) are **skipped**.
+Product decisions live in the Project ADR (`docs/tab-manager-adr.md`). Chrome Web Store packaging notes: `docs/chrome-web-store-checklist.md`.
 
-## Load unpacked & try Organize
+## Load unpacked
 
-1. Open Chrome → `chrome://extensions`
-2. Enable **Developer mode**
-3. **Load unpacked** → select this repository root (the folder that contains `manifest.json`)
-4. Click the extension action icon — the **Side Panel** opens (`openPanelOnActionClick`; there is **no** `default_popup`)
-5. Open **Options** → set `llmProvider` (`anthropic` or `openai-responses`), `endpointBaseUrl`, `apiKey`, `model` → Save  
-   - `TEST_LLM` always uses the **mock** client (safe connection check + field preview)
-6. In the Side Panel:
-   - Choose scope **All windows** or **Current window**
-   - Click **Organize tabs** → review the **privacy preview** (fields that would be sent; API key never shown)
-   - Click **Confirm & classify** → quick cache pass, then refine/classify misses with `GROUP_PROGRESS`
-   - Logical topics appear in the panel; Chrome shows physical groups **per window** (never cross-window move)
+1. Chrome → `chrome://extensions` → enable **Developer mode**
+2. **Load unpacked** → this repo root (folder with `manifest.json`)
+3. Click the action icon → **Side Panel** opens (no popup)
+4. **Options** → set provider / endpoint / API key / model → Save
+5. Side Panel → **Organize tabs** → review privacy preview → **Confirm & classify**
 
-Pinned tabs and `chrome://` / `chrome-extension://` / `devtools://` pages are skipped. There is **no** auto-group on tab complete.
-
-Optional host permissions are requested when content extract or custom endpoints need them — there is **no** default always-on `<all_urls>` content script. Extract is still a short title+URL+excerpt stub (full extractor = Phase 6).
-
-## Architecture overview
-
-```
-UI (Side Panel + Options)
-  └─ typed MSG.* ──► Service Worker orchestrator
-                        ├─ Topic cache (urlKey + contentHash LRU, chrome.storage.local)
-                        ├─ LLM client (Anthropic Messages | OpenAI Responses | Mock)
-                        ├─ On-demand group (preview → quick pass → refine → tabGroups)
-                        ├─ Dedupe / stacks (stubs → later phases)
-                        └─ chrome.scripting.executeScript extract (on demand, stub)
-```
-
-| Surface | Role |
-|---------|------|
-| `background/` | Sole orchestrator: messages, Chrome APIs, LLM & organize jobs |
-| `sidepanel/` | Primary UI: Organize CTA + privacy confirm, logical topics, search/Stacks shells |
-| `options/` | LLM endpoint, thresholds, privacy fields |
-| `shared/` | Pure modules: constants, URL normalize, cache, topic merge, LLM, physical plans |
-| `content/` | Extract stub for on-demand injection (not registered in manifest) |
-
-### Message types (UI ↔ SW)
-
-| Type | Direction | Purpose |
-|------|-----------|---------|
-| `PREVIEW_GROUP_PAYLOAD` / `GROUP_TABS` | UI → SW | Batch privacy preview + confirmed on-demand organize |
-| `CANCEL_GROUP` | UI → SW | Abort in-flight Organize (cooperative cancel + client run id) |
-| `PREVIEW_CLASSIFY_PAYLOAD` | UI → SW | Single-tab field preview |
-| `GROUP_PROGRESS` / `JOB_STATE` | SW → UI | Batch progress |
-| `GET_CONFIG` / `SET_CONFIG` / `TEST_LLM` | UI → SW | Config & mock connection test |
-| `SEARCH_QUERY` / `RECALL_STACK` / … | UI → SW | Later phases |
-
-## Development
+`TEST_LLM` uses a mock client. API keys stay in `chrome.storage.local` only — never commit them.
 
 ```bash
-npm test          # node --test (shared pure modules)
-npm run typecheck # syntax check entry modules
+npm test
+npm run typecheck
 ```
-
-ES modules only — no bundler required. Do **not** put API keys in the repo; Options stores them in `chrome.storage.local` only (never `storage.sync`).
-
-## Key decisions (Accepted ADR)
-
-- Grouping is **on-demand** (user click), not always-on
-- Logical topics may span windows; physical `tabGroups` stay per-window
-- URL normalize: strip hash + tracking params; keep other query
-- English fine-grained topics + synonym merge
-- Privacy: always show payload fields + preview before real LLM calls
-- Stacks = this extension’s reclaim records (not `chrome.sessions`)
