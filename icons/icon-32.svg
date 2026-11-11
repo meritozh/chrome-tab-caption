@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Pixel-aligned 32x32 source. Integer coords only; full-bleed plate. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <rect width="32" height="32" fill="#0f766e"/>
+  <rect x="5" y="5" width="15" height="10" rx="2" fill="#5eead4"/>
+  <rect x="9" y="11" width="15" height="10" rx="2" fill="#99f6e4"/>
+  <rect x="13" y="17" width="15" height="10" rx="2" fill="#f0fdfa"/>
+  <rect x="16" y="21" width="8" height="2" rx="1" fill="#0f766e"/>
+</svg>

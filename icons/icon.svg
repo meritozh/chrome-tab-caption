@@ -1,19 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="chrome-tab-caption mark">
-  <defs>
-    <linearGradient id="plate" x1="64" y1="2" x2="64" y2="126" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#0f766e"/>
-      <stop offset="1" stop-color="#0d4e4a"/>
-    </linearGradient>
-  </defs>
-  <rect x="2" y="2" width="124" height="124" rx="28" fill="url(#plate)"/>
-  <!-- stacked tabs -->
-  <rect x="22" y="23" width="60" height="38" rx="10" fill="#99f6e4"/>
-  <rect x="31" y="38" width="60" height="38" rx="10" fill="#ccfbf1"/>
-  <rect x="40" y="54" width="65" height="46" rx="10" fill="#f0fdfa"/>
-  <!-- tab ear -->
-  <rect x="40" y="44" width="22" height="15" rx="6" fill="#f0fdfa"/>
-  <!-- caption -->
-  <rect x="51" y="72" width="41" height="7" rx="3.5" fill="#0f766e"/>
-  <rect x="51" y="84" width="26" height="5" rx="2.5" fill="#5eead4"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none" role="img" aria-label="chrome-tab-caption">
+  <!--
+    Master vector mark (128 viewBox, integer coords).
+    Full-bleed plate — Chrome applies its own corner mask; do not pre-round the canvas.
+  -->
+  <rect width="128" height="128" fill="#0f766e"/>
+
+  <!-- Stacked tabs: back -> mid -> front -->
+  <rect x="20" y="22" width="64" height="38" rx="8" fill="#5eead4"/>
+  <rect x="32" y="38" width="64" height="38" rx="8" fill="#99f6e4"/>
+  <rect x="44" y="54" width="64" height="42" rx="8" fill="#f0fdfa"/>
+
+  <!-- Browser tab ear on front card -->
+  <path fill="#f0fdfa" d="M44 54V48c0-4 3-7 7-7h18c4 0 7 3 7 7v6H44z"/>
+
+  <!-- Caption lines -->
+  <rect x="54" y="70" width="40" height="8" rx="4" fill="#0f766e"/>
+  <rect x="54" y="84" width="28" height="6" rx="3" fill="#5eead4"/>
 </svg>
