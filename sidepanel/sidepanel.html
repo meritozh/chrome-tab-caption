@@ -30,15 +30,36 @@
         </p>
         <div class="sp-row">
           <label class="sp-label" for="group-scope">Scope</label>
-          <select id="group-scope" disabled title="Wired in Phase 2">
+          <select id="group-scope" title="All windows or current window">
             <option value="all">All windows</option>
             <option value="current">Current window</option>
           </select>
         </div>
-        <button type="button" id="btn-organize" class="sp-cta" disabled title="Phase 2 stub">
-          Organize tabs
-        </button>
-        <p id="organize-status" class="sp-status" role="status">Organize is stubbed (Phase 2).</p>
+        <button type="button" id="btn-organize" class="sp-cta">Organize tabs</button>
+        <p id="organize-status" class="sp-status" role="status">
+          Preview fields, then confirm before any real classify call.
+        </p>
+
+        <div id="organize-preview" class="sp-preview-panel" hidden>
+          <h3 class="sp-subhead">Privacy preview</h3>
+          <p id="organize-preview-summary" class="sp-help"></p>
+          <ul id="organize-preview-fields" class="sp-field-list"></ul>
+          <pre id="organize-preview-samples" class="sp-pre" hidden></pre>
+          <div class="sp-row sp-actions">
+            <button type="button" id="btn-confirm-organize" class="sp-cta">
+              Confirm &amp; classify
+            </button>
+            <button type="button" id="btn-cancel-organize" class="sp-secondary">Cancel</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="sp-section" aria-labelledby="topics-heading">
+        <h2 id="topics-heading">Logical topics</h2>
+        <p class="sp-help">Cross-window topics from the last Organize (physical groups stay per-window).</p>
+        <ul id="topics-list" class="sp-list">
+          <li class="sp-muted">No topics yet — run Organize.</li>
+        </ul>
       </section>
 
       <section class="sp-section" aria-labelledby="search-heading">
@@ -66,9 +87,9 @@
       </section>
 
       <section class="sp-section" aria-labelledby="preview-heading">
-        <h2 id="preview-heading">Privacy preview</h2>
+        <h2 id="preview-heading">Single-tab field preview</h2>
         <p class="sp-help">
-          Fields that would be sent to your LLM endpoint are always listed before a real call.
+          Inspect classify fields for the active tab without starting Organize.
         </p>
         <button type="button" id="btn-preview" class="sp-secondary">Preview classify fields</button>
         <pre id="preview-out" class="sp-pre" hidden></pre>

@@ -44,10 +44,12 @@ describe('apiKey wipe guards', () => {
     assert.deepEqual(sanitizeConfigPatch({ apiKey: 'sk-new' }), { apiKey: 'sk-new' });
   });
 
-  it('redactConfigForUi uses the sentinel constant', () => {
+  it('redactConfigForUi uses the sentinel constant and flags hasApiKey', () => {
     const redacted = redactConfigForUi({ apiKey: 'sk-secret', model: 'x' });
     assert.equal(redacted.apiKey, API_KEY_REDACTED);
+    assert.equal(redacted.hasApiKey, true);
     assert.equal(redacted.model, 'x');
+    assert.equal(redactConfigForUi({ model: 'x' }).hasApiKey, false);
   });
 
   it('saveConfig preserves stored apiKey when patch is empty/sentinel', async () => {

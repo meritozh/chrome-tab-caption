@@ -90,7 +90,7 @@ document.getElementById('btn-test-llm')?.addEventListener('click', async () => {
     title: 'Connection test',
   });
   status.textContent = res?.ok
-    ? `Mock OK — topic “${res.result?.topic ?? '?'}” (${res.note || 'stub'})`
+    ? `Mock OK — topic “${res.result?.topic ?? '?'}”. Preview fields listed; real Anthropic/Responses run on confirmed Organize.`
     : `Failed: ${res?.error || 'unknown'}`;
 });
 
