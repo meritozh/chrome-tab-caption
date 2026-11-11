@@ -66,6 +66,25 @@ describe('organizeCancelCheckpoint', () => {
     assert.deepEqual(organizeCancelCheckpoint(ac.signal, {}), { continue: true });
   });
 
+  it('does not invoke state factory unless aborted', () => {
+    const ac = new AbortController();
+    let called = 0;
+    const out = organizeCancelCheckpoint(ac.signal, () => {
+      called += 1;
+      return { llmCallsAttempted: 9 };
+    });
+    assert.deepEqual(out, { continue: true });
+    assert.equal(called, 0);
+    ac.abort();
+    const stopped = organizeCancelCheckpoint(ac.signal, () => {
+      called += 1;
+      return { llmCallsAttempted: 9, classified: 0 };
+    });
+    assert.equal(called, 1);
+    assert.equal(stopped.continue, false);
+    assert.equal(stopped.result.llmCallsAttempted, 9);
+  });
+
   it('stops queued work with honest LLM stats when aborted', () => {
     const ac = new AbortController();
     ac.abort();

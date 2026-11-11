@@ -254,6 +254,7 @@ export async function groupTabsOnDemand(opts) {
   /** @type {{ applied: number, errors: string[], latestWins?: boolean, stub?: boolean }} */
   let physical = { applied: 0, errors: [] };
 
+  // Factory — buildLogicalTopicViews only runs when the signal is actually aborted.
   const cancelState = () => ({
     jobId,
     scope,
@@ -268,7 +269,7 @@ export async function groupTabsOnDemand(opts) {
   /**
    * @returns {ReturnType<typeof organizeCancelCheckpoint>}
    */
-  const checkCancel = () => organizeCancelCheckpoint(signal, cancelState());
+  const checkCancel = () => organizeCancelCheckpoint(signal, cancelState);
 
   const earlyCancel = checkCancel();
   if (!earlyCancel.continue) {

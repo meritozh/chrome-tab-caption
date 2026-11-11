@@ -51,12 +51,14 @@ export function isPreviewOnlyCancel(phase) {
 
 /**
  * Cooperative checkpoint for groupTabsOnDemand.
+ * Pass a factory for `state` so expensive fields (e.g. logical views) are built only on abort.
  * @param {AbortSignal | null | undefined} signal
- * @param {OrganizeCancelStats & Record<string, unknown>} state
+ * @param {(OrganizeCancelStats & Record<string, unknown>) | (() => OrganizeCancelStats & Record<string, unknown>)} [stateOrFactory]
  * @returns {{ continue: true } | { continue: false, result: Record<string, unknown> }}
  */
-export function organizeCancelCheckpoint(signal, state = {}) {
+export function organizeCancelCheckpoint(signal, stateOrFactory = {}) {
   if (!signal?.aborted) return { continue: true };
+  const state = typeof stateOrFactory === 'function' ? stateOrFactory() : stateOrFactory;
   const llmCallsAttempted = Math.max(0, Number(state.llmCallsAttempted) || 0);
   const classified = Math.max(0, Number(state.classified) || 0);
   const classifyErrors = Math.max(0, Number(state.classifyErrors) || 0);
