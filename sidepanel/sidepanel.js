@@ -334,16 +334,20 @@ confirmBtn?.addEventListener('click', async () => {
 
 onBackgroundBroadcast((message) => {
   if (message.type === MSG.STACKS_OVERFLOW_WARN) {
-    showStacksOverflow(message);
+    showStacksOverflow(message?.needsUserAction ? message : null);
     refreshStacks();
     return;
   }
-  if (message.type === MSG.CONFIG_UPDATED && pendingPreview) {
-    organizeRunId += 1;
-    hidePreview();
-    setOrganizeIdle();
-    organizeStatus.textContent =
-      'Settings changed — run Organize again to refresh the privacy preview.';
+  if (message.type === MSG.CONFIG_UPDATED) {
+    // Always refresh Stacks so a cleared overflow gate hides Export/Discard.
+    refreshStacks();
+    if (pendingPreview) {
+      organizeRunId += 1;
+      hidePreview();
+      setOrganizeIdle();
+      organizeStatus.textContent =
+        'Settings changed — run Organize again to refresh the privacy preview.';
+    }
     return;
   }
   if (message.type !== MSG.GROUP_PROGRESS) return;

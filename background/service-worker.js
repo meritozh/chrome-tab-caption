@@ -308,6 +308,16 @@ function onMessage(message, sender, sendResponse) {
             .catch(() => {});
         } else if (overflowPending?.needsUserAction) {
           await setOverflowPending(null);
+          // Tell Side Panel to hide Export/Discard — CONFIG_UPDATED alone left a stale CTA.
+          chrome.runtime
+            .sendMessage({
+              type: MSG.STACKS_OVERFLOW_WARN,
+              needsUserAction: false,
+              cleared: true,
+              stackSize: stackStore.maxSize,
+              stackCount: stackStore.size,
+            })
+            .catch(() => {});
         }
         await persistStackRecords(stackStore);
         chrome.runtime.sendMessage({ type: MSG.CONFIG_UPDATED }).catch(() => {});

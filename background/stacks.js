@@ -501,24 +501,35 @@ export async function exportOrDiscardStacks(opts) {
   if (!store) return { ok: false, error: 'stack store unavailable' };
 
   const pending = opts.overflowPending;
+  const liveExcess = Math.max(0, store.size - store.maxSize);
+  // Refuse stale CTA clicks once the overflow gate was cleared (e.g. stackSize raised).
+  if (!pending?.needsUserAction && liveExcess <= 0) {
+    return { ok: false, error: 'no overflow pending', stackCount: store.size };
+  }
+
   // Shrink excess and blocked reclaim are separate — do not double-count.
-  const excess =
-    typeof pending?.excess === 'number'
-      ? Math.max(0, pending.excess)
-      : Math.max(0, store.size - store.maxSize);
   const blockedIncoming =
     typeof opts.count === 'number'
       ? Math.max(0, opts.count)
       : Math.max(0, Number(pending?.blocked) || 0);
-  // Default: free enough for one new reclaim when at exact capacity with no pending shape.
-  const incomingSlots =
-    excess > 0 || blockedIncoming > 0 ? blockedIncoming : 1;
 
   const freeCount = slotsToFreeForOverflow({
     size: store.size,
     maxSize: store.maxSize,
-    incomingSlots,
+    incomingSlots: blockedIncoming,
   });
+
+  if (freeCount <= 0) {
+    await opts.setOverflowPending?.(null);
+    return {
+      ok: true,
+      stub: false,
+      action,
+      discarded: 0,
+      stackCount: store.size,
+      cleared: true,
+    };
+  }
 
   let exportJson = null;
   if (action === 'export') {

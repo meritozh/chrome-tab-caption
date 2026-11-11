@@ -136,6 +136,31 @@ describe('maybeReclaim integration (mocked tabs)', () => {
     assert.equal(store.size, 1);
   });
 
+  it('refuses export/discard when overflow gate is already cleared', async () => {
+    const store = new StackRecordStore(2);
+    store.tryPush({
+      id: 'a',
+      url: 'https://a.test',
+      title: 'A',
+      reclaimedAt: 1,
+      lastAccessedAt: 1,
+    });
+    store.tryPush({
+      id: 'b',
+      url: 'https://b.test',
+      title: 'B',
+      reclaimedAt: 2,
+      lastAccessedAt: 2,
+    });
+    const result = await exportOrDiscardStacks({
+      action: 'discard',
+      stackStore: store,
+      overflowPending: null,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(store.size, 2);
+  });
+
   it('shrink overflow discards only the excess (not 2x)', async () => {
     const store = new StackRecordStore(2);
     // Force over capacity the way SET_CONFIG shrink does (push then lower maxSize).
