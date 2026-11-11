@@ -53,6 +53,7 @@ UI (Side Panel + Options)
 | Type | Direction | Purpose |
 |------|-----------|---------|
 | `PREVIEW_GROUP_PAYLOAD` / `GROUP_TABS` | UI → SW | Batch privacy preview + confirmed on-demand organize |
+| `CANCEL_GROUP` | UI → SW | Abort in-flight Organize (cooperative cancel + client run id) |
 | `PREVIEW_CLASSIFY_PAYLOAD` | UI → SW | Single-tab field preview |
 | `GROUP_PROGRESS` / `JOB_STATE` | SW → UI | Batch progress |
 | `GET_CONFIG` / `SET_CONFIG` / `TEST_LLM` | UI → SW | Config & mock connection test |

@@ -22,6 +22,7 @@ import { buildClassifyPayloadPreview, createLlmClient } from '../shared/llm-clie
 import { hasEndpointPermission } from '../shared/permissions.js';
 import { capExcerpt, persistTopicCache } from '../shared/topic-cache.js';
 import { extractTabContent } from '../content/extract.js';
+import { organizeCancelCheckpoint } from '../shared/organize-cancel.js';
 
 /**
  * @typedef {import('../shared/topic-cache.js').TopicCacheLru} TopicCacheLru
@@ -223,6 +224,8 @@ function collapseHeuristicSynonyms(assignments, registry) {
  * @param {TopicCacheLru} opts.topicCache
  * @param {Record<string, unknown>} opts.config
  * @param {{ useMock?: boolean }} [opts.llmOpts]
+ * @param {AbortSignal} [opts.signal] — cooperative cancel between classify steps
+ * @param {string} [opts.jobId]
  */
 export async function groupTabsOnDemand(opts) {
   if (!opts.confirmed) {
@@ -236,13 +239,50 @@ export async function groupTabsOnDemand(opts) {
   const scope = opts.scope === 'current' ? 'current' : 'all';
   const config = opts.config;
   const topicCache = opts.topicCache;
+  const signal = opts.signal;
   const deadline = createDeadline(TIMEOUTS.GROUP_JOB_MS);
-  const jobId = `group-${Date.now()}`;
+  const jobId = opts.jobId || `group-${Date.now()}`;
 
   /** @type {Map<string, import('../shared/topic-normalize.js').TopicRecord>} */
   const topicRegistry = new Map();
   /** @type {TabTopicAssignment[]} */
   const assignments = [];
+
+  let classified = 0;
+  let classifyErrors = 0;
+  let llmCallsAttempted = 0;
+  /** @type {{ applied: number, errors: string[], latestWins?: boolean, stub?: boolean }} */
+  let physical = { applied: 0, errors: [] };
+
+  const cancelState = () => ({
+    jobId,
+    scope,
+    llmCallsAttempted,
+    classified,
+    classifyErrors,
+    assignments,
+    physical,
+    logical: buildLogicalTopicViews(assignments),
+  });
+
+  /**
+   * @returns {ReturnType<typeof organizeCancelCheckpoint>}
+   */
+  const checkCancel = () => organizeCancelCheckpoint(signal, cancelState());
+
+  const earlyCancel = checkCancel();
+  if (!earlyCancel.continue) {
+    broadcastProgress({
+      jobId,
+      phase: 'cancelled',
+      done: 0,
+      total: 0,
+      llmCallsAttempted: 0,
+      classified: 0,
+      message: earlyCancel.result.message,
+    });
+    return earlyCancel.result;
+  }
 
   const allTabs = filterEligibleTabs(await queryTabsForScope(scope, opts.currentWindowId));
   const total = allTabs.length;
@@ -260,6 +300,19 @@ export async function groupTabsOnDemand(opts) {
 
   // Pass 1 — cache hits
   for (let i = 0; i < allTabs.length; i++) {
+    const cancelled = checkCancel();
+    if (!cancelled.continue) {
+      broadcastProgress({
+        jobId,
+        phase: 'cancelled',
+        done: assignments.length,
+        total,
+        llmCallsAttempted,
+        classified,
+        message: cancelled.result.message,
+      });
+      return cancelled.result;
+    }
     if (deadline.expired()) break;
     const tab = allTabs[i];
     const urlKey = normalizeUrlKey(tab.url || '');
@@ -296,7 +349,22 @@ export async function groupTabsOnDemand(opts) {
   }
 
   // Apply quick-pass physical groups early for responsiveness
-  let physical = { applied: 0, errors: /** @type {string[]} */ ([]) };
+  {
+    const cancelled = checkCancel();
+    if (!cancelled.continue) {
+      await persistTopicCache(topicCache);
+      broadcastProgress({
+        jobId,
+        phase: 'cancelled',
+        done: assignments.length,
+        total,
+        llmCallsAttempted,
+        classified,
+        message: cancelled.result.message,
+      });
+      return cancelled.result;
+    }
+  }
   if (assignments.length) {
     const quickPlans = planPhysicalGroups(assignments);
     physical = await applyPhysicalGroups(quickPlans);
@@ -327,6 +395,23 @@ export async function groupTabsOnDemand(opts) {
     }
   }
 
+  {
+    const cancelled = checkCancel();
+    if (!cancelled.continue) {
+      await persistTopicCache(topicCache);
+      broadcastProgress({
+        jobId,
+        phase: 'cancelled',
+        done: assignments.length,
+        total,
+        llmCallsAttempted,
+        classified,
+        message: cancelled.result.message,
+      });
+      return cancelled.result;
+    }
+  }
+
   const client = createLlmClient({
     provider: /** @type {any} */ (config.llmProvider || undefined),
     endpointBaseUrl: /** @type {string} */ (config.endpointBaseUrl || ''),
@@ -335,11 +420,23 @@ export async function groupTabsOnDemand(opts) {
     useMock,
   });
 
-  let classified = 0;
-  let classifyErrors = 0;
-
   // Pass 2 — refine queue
   for (let i = 0; i < refineQueue.length; i++) {
+    const cancelled = checkCancel();
+    if (!cancelled.continue) {
+      await persistTopicCache(topicCache);
+      broadcastProgress({
+        jobId,
+        phase: 'cancelled',
+        done: assignments.length,
+        total,
+        llmCallsAttempted,
+        classified,
+        message: cancelled.result.message,
+      });
+      return cancelled.result;
+    }
+
     if (deadline.expired()) {
       broadcastProgress({
         jobId,
@@ -359,6 +456,8 @@ export async function groupTabsOnDemand(opts) {
       total,
       refineIndex: i + 1,
       refineTotal: refineQueue.length,
+      llmCallsAttempted,
+      classified,
       message: `Classifying ${i + 1}/${refineQueue.length}: ${tab.title || urlKey}`,
     });
 
@@ -394,6 +493,7 @@ export async function groupTabsOnDemand(opts) {
       continue;
     }
 
+    llmCallsAttempted += 1;
     try {
       const result = await withTimeout(
         client.classifyTopic({
@@ -405,6 +505,7 @@ export async function groupTabsOnDemand(opts) {
         Math.min(TIMEOUTS.CLASSIFY_MS, Math.max(500, deadline.remaining())),
         'classify',
       );
+      // Keep the in-flight result (request already sent); cancel stops the next queue item.
       const topic = mergeTopicResult(result, topicRegistry);
       topicCache.upsert({
         urlKey,
@@ -442,6 +543,23 @@ export async function groupTabsOnDemand(opts) {
     }
   }
 
+  {
+    const cancelled = checkCancel();
+    if (!cancelled.continue) {
+      await persistTopicCache(topicCache);
+      broadcastProgress({
+        jobId,
+        phase: 'cancelled',
+        done: assignments.length,
+        total,
+        llmCallsAttempted,
+        classified,
+        message: cancelled.result.message,
+      });
+      return cancelled.result;
+    }
+  }
+
   collapseHeuristicSynonyms(assignments, topicRegistry);
 
   const logical = buildLogicalTopicViews(assignments);
@@ -458,6 +576,7 @@ export async function groupTabsOnDemand(opts) {
     applied: physical.applied,
     classified,
     classifyErrors,
+    llmCallsAttempted,
     message: `Done — ${logical.length} topics, ${physical.applied} window groups.`,
   });
 
@@ -471,6 +590,7 @@ export async function groupTabsOnDemand(opts) {
     physical,
     classified,
     classifyErrors,
+    llmCallsAttempted,
     cacheSize: topicCache.size,
     latestWinsAt: Date.now(),
     latestWinsSource: 'extension-organize',
