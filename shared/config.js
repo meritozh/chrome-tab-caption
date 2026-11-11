@@ -74,7 +74,9 @@ export async function saveConfig(patch, storage = globalThis.chrome?.storage) {
  */
 export function redactConfigForUi(config) {
   const copy = { ...config };
-  if (typeof copy.apiKey === 'string' && copy.apiKey.length > 0) {
+  const hasApiKey = typeof copy.apiKey === 'string' && copy.apiKey.length > 0;
+  copy.hasApiKey = hasApiKey;
+  if (hasApiKey) {
     copy.apiKey = API_KEY_REDACTED;
   }
   return copy;

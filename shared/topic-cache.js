@@ -1,9 +1,9 @@
 /**
- * Topic cache LRU interface — urlKey + contentHash → CacheEntry (ADR §3.2 / §5.2).
- * Pure in-memory stub; persistence wired later via chrome.storage.local.
+ * Topic cache LRU — urlKey + contentHash → CacheEntry (ADR §3.2 / §5.2).
+ * Persist/load via chrome.storage.local (STORAGE_KEYS.TOPIC_CACHE).
  */
 
-import { EXCERPT_HARD_CAP_CHARS } from './constants.js';
+import { EXCERPT_HARD_CAP_CHARS, STORAGE_KEYS } from './constants.js';
 
 /**
  * @typedef {object} CacheEntry
@@ -47,6 +47,17 @@ export class TopicCacheLru {
 
   get size() {
     return this._map.size;
+  }
+
+  /**
+   * Read without mutating LRU order / hit counts (privacy preview).
+   * @param {string} urlKey
+   * @param {string} contentHash
+   * @returns {CacheEntry | null}
+   */
+  peek(urlKey, contentHash) {
+    const key = TopicCacheLru.makeKey(urlKey, contentHash);
+    return this._map.get(key) ?? null;
   }
 
   /**
@@ -138,4 +149,65 @@ export class TopicCacheLru {
       this._map.delete(oldest);
     }
   }
+}
+
+/**
+ * Load topic cache from chrome.storage.local.
+ * @param {number} [maxSize]
+ * @param {typeof chrome.storage | undefined} storage
+ * @returns {Promise<TopicCacheLru>}
+ */
+export async function loadTopicCache(maxSize = 500, storage = globalThis.chrome?.storage) {
+  if (!storage?.local) return new TopicCacheLru(maxSize);
+  const result = await storage.local.get(STORAGE_KEYS.TOPIC_CACHE);
+  const raw = result[STORAGE_KEYS.TOPIC_CACHE];
+  const cache = TopicCacheLru.fromJSON(
+    raw && typeof raw === 'object'
+      ? { maxSize: raw.maxSize ?? maxSize, entries: raw.entries }
+      : { maxSize, entries: [] },
+  );
+  cache.maxSize = Math.max(1, maxSize);
+  cache._evict();
+  return cache;
+}
+
+/**
+ * Persist topic cache snapshot. Does not log entry contents.
+ * @param {TopicCacheLru} cache
+ * @param {typeof chrome.storage | undefined} storage
+ */
+export async function persistTopicCache(cache, storage = globalThis.chrome?.storage) {
+  if (!storage?.local || !cache) return;
+  await storage.local.set({
+    [STORAGE_KEYS.TOPIC_CACHE]: cache.toJSON(),
+  });
+}
+
+/**
+ * Merge another cache's entries into `target` (LRU order preserved for incoming).
+ * Useful after hydrate + in-memory upserts.
+ * @param {TopicCacheLru} target
+ * @param {TopicCacheLru | { entries?: import('./topic-cache.js').CacheEntry[] } | null | undefined} source
+ */
+export function mergeTopicCacheEntries(target, source) {
+  if (!target || !source) return target;
+  const entries =
+    typeof source.entries === 'function'
+      ? source.entries()
+      : Array.isArray(source.entries)
+        ? source.entries
+        : [];
+  for (const e of entries) {
+    if (!e?.urlKey || !e?.contentHash || !e?.topicKey) continue;
+    target.upsert({
+      urlKey: e.urlKey,
+      contentHash: e.contentHash,
+      topicKey: e.topicKey,
+      topicLabel: e.topicLabel || e.topicKey,
+      excerpt: e.excerpt,
+      createdAt: e.createdAt,
+      hitCount: e.hitCount,
+    });
+  }
+  return target;
 }

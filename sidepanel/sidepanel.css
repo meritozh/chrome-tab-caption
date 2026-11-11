@@ -206,3 +206,44 @@ select:disabled {
   clip: rect(0, 0, 0, 0);
   border: 0;
 }
+
+.sp-preview-panel {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.sp-subhead {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+}
+
+.sp-field-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.35rem 0 0.65rem;
+  padding: 0;
+  list-style: none;
+}
+
+.sp-field-list li {
+  margin: 0;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  font-size: 0.8rem;
+}
+
+.sp-field-list code {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.sp-actions {
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}

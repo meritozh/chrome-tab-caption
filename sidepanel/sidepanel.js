@@ -1,10 +1,11 @@
 /**
- * Side Panel shell — Organize CTA (stub), search stub, Stacks stub, Settings link.
+ * Side Panel — Organize CTA with privacy preview confirm, search stub, Stacks stub.
  * No LLM side-effects here; messages go to the service worker.
  */
 
 import { MSG } from '../shared/constants.js';
-import { sendToBackground } from '../shared/messages.js';
+import { sendToBackground, onBackgroundBroadcast } from '../shared/messages.js';
+import { ensureEndpointPermission } from '../shared/permissions.js';
 
 const views = {
   main: document.getElementById('view-main'),
@@ -35,16 +36,134 @@ document.getElementById('link-options')?.addEventListener('click', (e) => {
 });
 
 const organizeBtn = document.getElementById('btn-organize');
+const confirmBtn = document.getElementById('btn-confirm-organize');
+const cancelBtn = document.getElementById('btn-cancel-organize');
 const organizeStatus = document.getElementById('organize-status');
+const previewPanel = document.getElementById('organize-preview');
+const scopeSelect = /** @type {HTMLSelectElement | null} */ (document.getElementById('group-scope'));
+
+/** @type {object | null} */
+let pendingPreview = null;
+let organizeBusy = false;
+
+function setBusy(busy) {
+  organizeBusy = busy;
+  if (organizeBtn) organizeBtn.disabled = busy;
+  if (confirmBtn) confirmBtn.disabled = busy;
+  if (scopeSelect) scopeSelect.disabled = busy;
+}
+
+function hidePreview() {
+  pendingPreview = null;
+  if (previewPanel) previewPanel.hidden = true;
+}
+
+function renderOrganizePreview(preview) {
+  pendingPreview = preview;
+  if (!previewPanel) return;
+  previewPanel.hidden = false;
+  const summary = document.getElementById('organize-preview-summary');
+  const fieldsEl = document.getElementById('organize-preview-fields');
+  const samplesEl = document.getElementById('organize-preview-samples');
+  if (summary) {
+    summary.textContent = `${preview.eligibleCount} eligible tabs · ${preview.cacheHits} cache hits · ${preview.cacheMisses} to classify. Fields below are what real classify would send (API key never shown).`;
+  }
+  if (fieldsEl) {
+    fieldsEl.innerHTML = (preview.fieldsTemplate || [])
+      .map((name) => `<li><code>${escapeHtml(name)}</code></li>`)
+      .join('');
+  }
+  if (samplesEl) {
+    samplesEl.hidden = false;
+    samplesEl.textContent = JSON.stringify(preview.samples ?? [], null, 2);
+  }
+}
+
 organizeBtn?.addEventListener('click', async () => {
-  // Remains disabled in Phase 0/1; handler ready for Phase 2 wiring.
-  organizeStatus.textContent = 'Organize stub — Phase 2 will send GROUP_TABS after privacy preview.';
-  const res = await sendToBackground(MSG.GROUP_TABS, { scope: 'all' }).catch((err) => ({
+  if (organizeBusy) return;
+  setBusy(true);
+  organizeStatus.textContent = 'Building privacy preview…';
+  const scope = scopeSelect?.value === 'current' ? 'current' : 'all';
+  const res = await sendToBackground(MSG.PREVIEW_GROUP_PAYLOAD, { scope }).catch((err) => ({
     ok: false,
     error: String(err),
   }));
-  organizeStatus.textContent = res?.error || JSON.stringify(res);
+  setBusy(false);
+  if (!res?.ok) {
+    organizeStatus.textContent = res?.error || 'Preview failed';
+    hidePreview();
+    return;
+  }
+  renderOrganizePreview(res.preview);
+  organizeStatus.textContent = 'Review fields, then confirm to classify cache misses.';
 });
+
+cancelBtn?.addEventListener('click', () => {
+  hidePreview();
+  organizeStatus.textContent = 'Organize cancelled — no LLM calls.';
+});
+
+confirmBtn?.addEventListener('click', async () => {
+  if (organizeBusy || !pendingPreview) return;
+  setBusy(true);
+  organizeStatus.textContent = 'Organizing…';
+
+  // Request endpoint host permission in the user-gesture turn (MV3 requirement).
+  const cfg = await sendToBackground(MSG.GET_CONFIG).catch(() => null);
+  const endpoint = cfg?.config?.endpointBaseUrl || '';
+  if (endpoint && cfg?.config?.hasApiKey && cfg?.config?.llmProvider) {
+    const allowed = await ensureEndpointPermission(endpoint);
+    if (!allowed) {
+      setBusy(false);
+      organizeStatus.textContent =
+        'Host permission for the LLM endpoint was denied. Grant access, then confirm again.';
+      return;
+    }
+  }
+
+  const scope = scopeSelect?.value === 'current' ? 'current' : 'all';
+  const res = await sendToBackground(MSG.GROUP_TABS, {
+    scope,
+    confirmed: true,
+  }).catch((err) => ({ ok: false, error: String(err) }));
+  setBusy(false);
+  hidePreview();
+  if (!res?.ok) {
+    organizeStatus.textContent = res?.error || 'Organize failed';
+    return;
+  }
+  const topics = res.logical?.length ?? 0;
+  const applied = res.physical?.applied ?? 0;
+  organizeStatus.textContent = `Done — ${topics} logical topics, ${applied} physical groups, ${res.classified ?? 0} classified.`;
+  renderLogicalTopics(res.logical || []);
+});
+
+onBackgroundBroadcast((message) => {
+  if (message.type !== MSG.GROUP_PROGRESS) return;
+  if (typeof message.message === 'string') {
+    organizeStatus.textContent = message.message;
+  }
+});
+
+function renderLogicalTopics(logical) {
+  const list = document.getElementById('topics-list');
+  if (!list) return;
+  if (!logical.length) {
+    list.innerHTML = '<li class="sp-muted">No topics yet — run Organize.</li>';
+    return;
+  }
+  list.innerHTML = logical
+    .map(
+      (t) =>
+        `<li><strong>${escapeHtml(t.label || t.topicKey)}</strong> · ${t.tabIds?.length ?? 0} tabs · windows ${(t.windowIds || []).join(', ') || '—'}</li>`,
+    )
+    .join('');
+}
+
+async function refreshLogicalTopics() {
+  const res = await sendToBackground(MSG.GET_LOGICAL_TOPICS).catch(() => null);
+  renderLogicalTopics(res?.logical ?? []);
+}
 
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
@@ -99,3 +218,4 @@ function escapeHtml(s) {
 }
 
 refreshStacks();
+refreshLogicalTopics();

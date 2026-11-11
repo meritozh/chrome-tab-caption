@@ -29,6 +29,7 @@ export const MSG = Object.freeze({
   // UI → SW
   GROUP_TABS: 'GROUP_TABS',
   PREVIEW_CLASSIFY_PAYLOAD: 'PREVIEW_CLASSIFY_PAYLOAD',
+  PREVIEW_GROUP_PAYLOAD: 'PREVIEW_GROUP_PAYLOAD',
   SEARCH_QUERY: 'SEARCH_QUERY',
   RECALL_STACK: 'RECALL_STACK',
   EXPORT_OR_DISCARD_STACKS: 'EXPORT_OR_DISCARD_STACKS',
@@ -37,6 +38,7 @@ export const MSG = Object.freeze({
   TEST_LLM: 'TEST_LLM',
   GET_STACKS: 'GET_STACKS',
   GET_ACTIVITY_LOG: 'GET_ACTIVITY_LOG',
+  GET_LOGICAL_TOPICS: 'GET_LOGICAL_TOPICS',
 
   // SW → UI
   GROUP_PROGRESS: 'GROUP_PROGRESS',
@@ -45,6 +47,17 @@ export const MSG = Object.freeze({
   ACTIVITY_LOG: 'ACTIVITY_LOG',
   CONFIG_UPDATED: 'CONFIG_UPDATED',
 });
+
+/** Timeouts for on-demand organize (ms). */
+export const TIMEOUTS = Object.freeze({
+  EXTRACT_MS: 2000,
+  CLASSIFY_MS: 8000,
+  GROUP_JOB_MS: 60000,
+  CACHE_SYNC_DEBOUNCE_MS: 500,
+});
+
+/** Chrome tabGroups.TAB_GROUP_ID_NONE stand-in when chrome is unavailable. */
+export const TAB_GROUP_ID_NONE = -1;
 
 /** Default config — ADR §6. Secrets stay empty; never commit keys. */
 export const DEFAULT_CONFIG = Object.freeze({
