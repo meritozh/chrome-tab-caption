@@ -18,11 +18,19 @@ describe('survivorScore', () => {
 });
 
 describe('isDedupeCandidate', () => {
-  it('rejects skippable URLs, missing ids, and closingTabIds', () => {
+  it('rejects skippable URLs, missing ids, closingTabIds, and unsaved tabs', () => {
     assert.equal(isDedupeCandidate({ id: 1, url: 'chrome://newtab' }, null), false);
     assert.equal(isDedupeCandidate({ url: 'https://a.test' }, null), false);
     assert.equal(isDedupeCandidate({ id: 1, url: 'https://a.test' }, new Set([1])), false);
     assert.equal(isDedupeCandidate({ id: 1, url: 'https://a.test' }, new Set()), true);
+    assert.equal(
+      isDedupeCandidate({ id: 2, url: 'https://a.test', title: '* Draft' }, null),
+      false,
+    );
+    assert.equal(
+      isDedupeCandidate({ id: 3, url: 'about:blank' }, null),
+      false,
+    );
   });
 });
 
@@ -74,6 +82,25 @@ describe('groupTabsByNormalizedUrl / planAutoCloseOlder', () => {
       ],
       { closingTabIds: new Set([1]) },
     );
+    assert.equal(plans.length, 0);
+  });
+
+  it('collapses same-window exact URL copies (ADR inclusive of cross-window)', () => {
+    // ADR §5.4: "跨 window 算重复" means cross-window counts — same-window still dedupes.
+    const plans = planAutoCloseOlder([
+      { id: 1, windowId: 1, url: 'https://a.test/x', lastAccessed: 1 },
+      { id: 2, windowId: 1, url: 'https://a.test/x', lastAccessed: 9, active: true },
+    ]);
+    assert.equal(plans.length, 1);
+    assert.equal(plans[0].keep.id, 2);
+    assert.equal(plans[0].close[0].id, 1);
+  });
+
+  it('does not plan closes when the only peer looks unsaved', () => {
+    const plans = planAutoCloseOlder([
+      { id: 1, windowId: 1, url: 'https://a.test/x', title: '* Edit', lastAccessed: 1 },
+      { id: 2, windowId: 2, url: 'https://a.test/x', lastAccessed: 9, active: true },
+    ]);
     assert.equal(plans.length, 0);
   });
 });

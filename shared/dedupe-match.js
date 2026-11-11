@@ -1,11 +1,17 @@
 /**
  * Pure duplicate grouping + survivor selection (ADR §5.4 Phase 5).
- * Same normalized URL across windows = duplicate.
+ *
+ * ADR Decision B: same normalized URL is a duplicate **including across windows**
+ * ("含跨 window" / "跨 window 算重复") — same-window exact URL copies are also
+ * collapsed. That is intentional, not a windowId filter miss.
+ *
  * Keep: active / audible / pinned / most recent lastAccessed; close older.
+ * Never treat unsaved / dirty-title tabs as closeable candidates.
  */
 
 import { normalizeUrlKey } from './url-normalize.js';
 import { isSkippableUrl } from './tab-eligibility.js';
+import { tabLooksUnsaved } from './reclaim-policy.js';
 
 /**
  * Survivor score — higher means keep. Priority: active > audible > pinned > lastAccessed.
@@ -24,11 +30,13 @@ export function survivorScore(tab) {
 }
 
 /**
- * Whether a tab can participate in auto-dedupe.
- * @param {{ id?: number, url?: string }} tab
+ * Whether a tab can participate in auto-dedupe (as keep or close).
+ * Unsaved / dirty-title tabs are excluded so we never auto-close them.
+ * @param {{ id?: number, url?: string, title?: string }} tab
  * @param {Set<number> | Iterable<number> | null | undefined} closingTabIds
+ * @param {{ beforeUnloadRiskIds?: Set<number> | Iterable<number> | null }} [opts]
  */
-export function isDedupeCandidate(tab, closingTabIds) {
+export function isDedupeCandidate(tab, closingTabIds, opts = {}) {
   if (!tab || typeof tab.id !== 'number') return false;
   if (closingTabIds) {
     const closing =
@@ -37,13 +45,19 @@ export function isDedupeCandidate(tab, closingTabIds) {
   }
   if (!tab.url || isSkippableUrl(tab.url)) return false;
   if (!normalizeUrlKey(tab.url)) return false;
+  if (tabLooksUnsaved(tab)) return false;
+  const risk = opts.beforeUnloadRiskIds;
+  if (risk) {
+    const set = risk instanceof Set ? risk : new Set(risk);
+    if (set.has(tab.id)) return false;
+  }
   return true;
 }
 
 /**
  * Group eligible tabs by normalized URL key.
- * @param {Array<{ id?: number, url?: string, active?: boolean, audible?: boolean, pinned?: boolean, lastAccessed?: number, windowId?: number }>} tabs
- * @param {{ closingTabIds?: Set<number> | Iterable<number> | null, stripHash?: boolean, stripTracking?: boolean }} [opts]
+ * @param {Array<{ id?: number, url?: string, title?: string, active?: boolean, audible?: boolean, pinned?: boolean, lastAccessed?: number, windowId?: number }>} tabs
+ * @param {{ closingTabIds?: Set<number> | Iterable<number> | null, stripHash?: boolean, stripTracking?: boolean, beforeUnloadRiskIds?: Set<number> | Iterable<number> | null }} [opts]
  * @returns {Map<string, typeof tabs>}
  */
 export function groupTabsByNormalizedUrl(tabs, opts = {}) {
@@ -55,7 +69,7 @@ export function groupTabsByNormalizedUrl(tabs, opts = {}) {
   };
 
   for (const tab of tabs || []) {
-    if (!isDedupeCandidate(tab, opts.closingTabIds)) continue;
+    if (!isDedupeCandidate(tab, opts.closingTabIds, opts)) continue;
     const key = normalizeUrlKey(tab.url || '', normalizeOpts);
     if (!key) continue;
     const list = groups.get(key);
@@ -70,9 +84,10 @@ export function groupTabsByNormalizedUrl(tabs, opts = {}) {
  */
 
 /**
- * Build auto-close-older plans for duplicate groups (cross-window).
- * @param {Array<{ id?: number, url?: string, active?: boolean, audible?: boolean, pinned?: boolean, lastAccessed?: number, windowId?: number }>} tabs
- * @param {{ closingTabIds?: Set<number> | Iterable<number> | null, stripHash?: boolean, stripTracking?: boolean }} [opts]
+ * Build auto-close-older plans for duplicate groups.
+ * Same-window and cross-window exact normalized URLs both qualify (ADR §5.4).
+ * @param {Array<{ id?: number, url?: string, title?: string, active?: boolean, audible?: boolean, pinned?: boolean, lastAccessed?: number, windowId?: number }>} tabs
+ * @param {{ closingTabIds?: Set<number> | Iterable<number> | null, stripHash?: boolean, stripTracking?: boolean, beforeUnloadRiskIds?: Set<number> | Iterable<number> | null }} [opts]
  * @returns {DedupePlan[]}
  */
 export function planAutoCloseOlder(tabs, opts = {}) {

@@ -653,7 +653,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onCreated.addListener(() => {
-  scheduleDedupe();
+  // Reclaim pass always runs dedupe first (ADR order). Avoid a second overlapping
+  // scheduleDedupe on create — runAutoDedupe is also serialized via dedupeGate.
   scheduleReclaim();
 });
 

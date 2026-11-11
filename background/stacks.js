@@ -20,6 +20,7 @@ import {
 import { normalizeUrlKey, computeContentHash } from '../shared/url-normalize.js';
 import { colorForTopicKey } from '../shared/physical-groups.js';
 import { suppressClosedRemove } from '../shared/suppress-closed.js';
+import { probeBeforeUnloadRisk } from '../shared/beforeunload-probe.js';
 import { runAutoDedupe } from './dedupe.js';
 
 /**
@@ -27,47 +28,7 @@ import { runAutoDedupe } from './dedupe.js';
  * @typedef {import('../shared/topic-cache.js').TopicCacheLru} TopicCacheLru
  */
 
-/**
- * Best-effort beforeunload / dirty-form probe (ADR: imperfect, exclude when detected).
- * @param {number} tabId
- * @param {typeof chrome.scripting | undefined} scriptingApi
- */
-export async function probeBeforeUnloadRisk(tabId, scriptingApi = globalThis.chrome?.scripting) {
-  if (typeof tabId !== 'number' || !scriptingApi?.executeScript) return false;
-  try {
-    const results = await scriptingApi.executeScript({
-      target: { tabId },
-      func: () => {
-        if (typeof window.onbeforeunload === 'function') return true;
-        try {
-          const els = document.querySelectorAll(
-            'input, textarea, select, [contenteditable=""], [contenteditable="true"]',
-          );
-          for (const el of els) {
-            if (el instanceof HTMLElement && el.isContentEditable) {
-              if ((el.textContent || '').trim().length > 0) return true;
-              continue;
-            }
-            if (
-              el instanceof HTMLInputElement ||
-              el instanceof HTMLTextAreaElement ||
-              el instanceof HTMLSelectElement
-            ) {
-              if (el.value !== el.defaultValue) return true;
-            }
-          }
-        } catch {
-          // page DOM restricted
-        }
-        return false;
-      },
-    });
-    return Boolean(results?.[0]?.result);
-  } catch {
-    // CSP / host permission — fail-soft: do not treat as risk (can't confirm).
-    return false;
-  }
-}
+export { probeBeforeUnloadRisk };
 
 /**
  * Resolve topic + live group metadata for a tab about to be reclaimed.
@@ -220,7 +181,9 @@ export async function maybeReclaim(opts) {
           closingTabIds,
           tabsApi,
           windowsApi: opts.windowsApi,
+          scriptingApi: opts.scriptingApi,
           activityLog: opts.activityLog,
+          probeUnload: opts.probeUnload,
         })
       : { closed: 0, skipped: 'noClosingSet', stub: false };
 

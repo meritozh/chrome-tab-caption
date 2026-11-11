@@ -87,7 +87,8 @@
         </label>
         <p class="opt-help">
           Same normalized URL (hash + tracking params stripped; other query kept) counts as a
-          duplicate across windows. Keeps active / audible / pinned / most recently accessed;
+          duplicate within a window and across windows (ADR: cross-window inclusive). Keeps
+          active / audible / pinned / most recently accessed; skips unsaved / dirty-title tabs;
           activates the survivor, then closes older copies.
         </p>
       </fieldset>

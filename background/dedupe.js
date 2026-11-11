@@ -1,13 +1,20 @@
 /**
  * Cross-window auto-dedupe (ADR Phase 5 / §5.4).
  * Mode: auto-close-older for same normalized URL (hash + tracking stripped).
+ * Same-window exact URL copies are also collapsed (ADR "含跨 window" is inclusive).
  * Safety: activate keep + focus window → suppressClosed remove;
  * closingTabIds prevents re-entry; any step failure → keep both.
+ * Serialized via dedupeGate so scheduleDedupe + reclaim cannot race closes.
  */
 
 import { MSG } from '../shared/constants.js';
 import { planAutoCloseOlder } from '../shared/dedupe-match.js';
 import { suppressClosedRemove } from '../shared/suppress-closed.js';
+import { probeBeforeUnloadRisk } from '../shared/beforeunload-probe.js';
+import { tabLooksUnsaved } from '../shared/reclaim-policy.js';
+
+/** @type {Promise<unknown>} */
+let dedupeGate = Promise.resolve();
 
 /**
  * @param {object} [opts]
@@ -15,11 +22,32 @@ import { suppressClosedRemove } from '../shared/suppress-closed.js';
  * @param {Set<number>} [opts.closingTabIds]
  * @param {typeof chrome.tabs} [opts.tabsApi]
  * @param {typeof chrome.windows} [opts.windowsApi]
+ * @param {typeof chrome.scripting} [opts.scriptingApi]
  * @param {{ push: (e: object) => object }} [opts.activityLog]
  * @param {boolean} [opts.broadcast]
+ * @param {boolean} [opts.probeUnload]
  * @returns {Promise<{ closed: number, kept: number, groups: number, stub: false, skipped?: string, errors?: string[] }>}
  */
 export async function runAutoDedupe(opts = {}) {
+  // Serialize all callers (standalone scheduleDedupe + maybeReclaim).
+  let release = () => {};
+  const myTurn = new Promise((resolve) => {
+    release = resolve;
+  });
+  const previous = dedupeGate;
+  dedupeGate = previous.then(() => myTurn, () => myTurn);
+  await previous.catch(() => {});
+  try {
+    return await runAutoDedupeUnlocked(opts);
+  } finally {
+    release();
+  }
+}
+
+/**
+ * @param {object} [opts]
+ */
+async function runAutoDedupeUnlocked(opts = {}) {
   // Back-compat: maybeReclaim historically passed a Set as the sole arg.
   const closingTabIds =
     opts instanceof Set ? opts : opts.closingTabIds instanceof Set ? opts.closingTabIds : null;
@@ -27,8 +55,11 @@ export async function runAutoDedupe(opts = {}) {
   const tabsApi = (opts instanceof Set ? undefined : opts.tabsApi) ?? globalThis.chrome?.tabs;
   const windowsApi =
     (opts instanceof Set ? undefined : opts.windowsApi) ?? globalThis.chrome?.windows;
+  const scriptingApi =
+    (opts instanceof Set ? undefined : opts.scriptingApi) ?? globalThis.chrome?.scripting;
   const activityLog = opts instanceof Set ? undefined : opts.activityLog;
-  const broadcast = opts instanceof Set ? true : opts.broadcast !== false; // default on
+  const broadcast = opts instanceof Set ? true : opts.broadcast !== false;
+  const probeUnload = opts instanceof Set ? true : opts.probeUnload !== false;
 
   if (!closingTabIds) {
     return { closed: 0, kept: 0, groups: 0, stub: false, skipped: 'noClosingSet' };
@@ -36,7 +67,6 @@ export async function runAutoDedupe(opts = {}) {
   if (config.autoDedupeEnabled === false) {
     return { closed: 0, kept: 0, groups: 0, stub: false, skipped: 'autoDedupeDisabled' };
   }
-  // Only supported mode today (ADR Decision B). Unknown modes → no-op.
   const mode = config.dedupeMode || 'auto-close-older';
   if (mode !== 'auto-close-older') {
     return { closed: 0, kept: 0, groups: 0, stub: false, skipped: `unsupportedMode:${mode}` };
@@ -60,10 +90,34 @@ export async function runAutoDedupe(opts = {}) {
     };
   }
 
+  // Probe possible close targets for beforeunload / dirty forms before planning.
+  /** @type {Set<number>} */
+  const beforeUnloadRiskIds = new Set();
+  if (probeUnload) {
+    const prelim = planAutoCloseOlder(tabs, {
+      closingTabIds,
+      stripHash: config.urlNormalizeStripHash !== false,
+      stripTracking: config.urlNormalizeStripTrackingParams !== false,
+    });
+    /** @type {Set<number>} */
+    const toProbe = new Set();
+    for (const plan of prelim) {
+      for (const dup of plan.close) {
+        if (typeof dup?.id === 'number' && !tabLooksUnsaved(dup)) toProbe.add(dup.id);
+      }
+    }
+    for (const id of toProbe) {
+      if (await probeBeforeUnloadRisk(id, scriptingApi)) {
+        beforeUnloadRiskIds.add(id);
+      }
+    }
+  }
+
   const plans = planAutoCloseOlder(tabs, {
     closingTabIds,
     stripHash: config.urlNormalizeStripHash !== false,
     stripTracking: config.urlNormalizeStripTrackingParams !== false,
+    beforeUnloadRiskIds,
   });
 
   if (!plans.length) {
@@ -83,21 +137,31 @@ export async function runAutoDedupe(opts = {}) {
     for (const dup of plan.close) {
       const dupId = dup?.id;
       if (typeof dupId !== 'number') continue;
+      // Reserve immediately so a nested / late planner skips this id.
       if (closingTabIds.has(dupId) || closingTabIds.has(keepId)) {
-        // Re-entry / concurrent close — leave both.
+        continue;
+      }
+      if (tabLooksUnsaved(dup) || beforeUnloadRiskIds.has(dupId)) {
         continue;
       }
 
+      // Mark before activate so concurrent work sees the suppress set.
+      closingTabIds.add(dupId);
+
       const activated = await activateSurvivor(keepId, plan.keep.windowId, tabsApi, windowsApi);
       if (!activated.ok) {
+        closingTabIds.delete(dupId);
         errors.push(activated.error || `activate failed for keep ${keepId}`);
-        // Fail → keep both (do not remove dup).
         continue;
       }
 
       const removed = await suppressClosedRemove(dupId, closingTabIds, tabsApi);
       if (!removed.ok) {
         errors.push(removed.error || `remove failed for ${dupId}`);
+        continue;
+      }
+      if (removed.alreadyClosed) {
+        // Peer won the race; don't double-count / double-log.
         continue;
       }
 
@@ -130,7 +194,6 @@ export async function runAutoDedupe(opts = {}) {
 }
 
 /**
- * Activate survivor tab and focus its window before removing a duplicate.
  * @param {number} keepId
  * @param {number | undefined} windowId
  * @param {typeof chrome.tabs} tabsApi

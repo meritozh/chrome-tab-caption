@@ -83,6 +83,7 @@ describe('runAutoDedupe', () => {
       windowsApi,
       activityLog,
       broadcast: false,
+      probeUnload: false,
     });
 
     assert.equal(result.stub, false);
@@ -113,6 +114,7 @@ describe('runAutoDedupe', () => {
       tabsApi,
       windowsApi,
       broadcast: false,
+      probeUnload: false,
     });
     assert.equal(result.closed, 0);
     assert.equal(tabsApi._tabs.size, 2);
@@ -130,9 +132,47 @@ describe('runAutoDedupe', () => {
       tabsApi,
       windowsApi,
       broadcast: false,
+      probeUnload: false,
     });
     assert.equal(result.skipped, 'autoDedupeDisabled');
     assert.equal(tabsApi._tabs.size, 2);
+  });
+
+  it('skips unsaved duplicates instead of closing them', async () => {
+    const { tabsApi, windowsApi } = makeChromeApis([
+      { id: 1, windowId: 1, url: 'https://edit.test/', title: '* Draft', lastAccessed: 1 },
+      { id: 2, windowId: 2, url: 'https://edit.test/', lastAccessed: 9, active: true },
+    ]);
+    const result = await runAutoDedupe({
+      config: { autoDedupeEnabled: true, dedupeMode: 'auto-close-older' },
+      closingTabIds: new Set(),
+      tabsApi,
+      windowsApi,
+      broadcast: false,
+      probeUnload: false,
+    });
+    assert.equal(result.closed, 0);
+    assert.equal(tabsApi._tabs.size, 2);
+  });
+
+  it('serializes overlapping runAutoDedupe calls', async () => {
+    const { tabsApi, windowsApi } = makeChromeApis([
+      { id: 1, windowId: 1, url: 'https://race.test/', lastAccessed: 1 },
+      { id: 2, windowId: 2, url: 'https://race.test/', lastAccessed: 9, active: true },
+    ]);
+    const closingTabIds = new Set();
+    const opts = {
+      config: { autoDedupeEnabled: true, dedupeMode: 'auto-close-older' },
+      closingTabIds,
+      tabsApi,
+      windowsApi,
+      broadcast: false,
+      probeUnload: false,
+    };
+    const [a, b] = await Promise.all([runAutoDedupe(opts), runAutoDedupe(opts)]);
+    assert.equal(a.closed + b.closed, 1);
+    assert.equal(tabsApi._tabs.size, 1);
+    assert.equal(tabsApi._tabs.has(2), true);
   });
 });
 
