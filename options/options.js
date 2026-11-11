@@ -56,8 +56,11 @@ function readForm() {
       continue;
     }
     if (el.type === 'number') {
-      const n = Number(el.value);
-      patch[name] = Number.isFinite(n) ? n : DEFAULT_CONFIG[name];
+      // Blank → Number('') === 0, which isFinite — treat empty/non-positive as default.
+      const raw = String(el.value ?? '').trim();
+      const n = Number(raw);
+      patch[name] =
+        raw !== '' && Number.isFinite(n) && n >= 1 ? n : DEFAULT_CONFIG[name];
     } else {
       patch[name] = el.value;
     }

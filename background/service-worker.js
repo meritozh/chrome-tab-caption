@@ -56,8 +56,8 @@ function onMessage(message, _sender, sendResponse) {
       }
       case MSG.SET_CONFIG: {
         const next = await saveConfig(message.patch ?? {});
-        topicCache.maxSize = next.cacheSize;
-        stackStore.maxSize = next.stackSize;
+        topicCache.maxSize = Math.max(1, Number(next.cacheSize) || DEFAULT_CONFIG.cacheSize);
+        stackStore.maxSize = Math.max(1, Number(next.stackSize) || DEFAULT_CONFIG.stackSize);
         chrome.runtime.sendMessage({ type: MSG.CONFIG_UPDATED }).catch(() => {});
         sendResponse({ ok: true, config: redactConfigForUi(next) });
         break;
