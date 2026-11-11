@@ -5,7 +5,7 @@
 
 import { MSG } from '../shared/constants.js';
 import { sendToBackground, onBackgroundBroadcast } from '../shared/messages.js';
-import { ensureEndpointPermission } from '../shared/permissions.js';
+import { requestOrganizePermissions } from '../shared/permissions.js';
 
 const views = {
   main: document.getElementById('view-main'),
@@ -42,7 +42,21 @@ const organizeStatus = document.getElementById('organize-status');
 const previewPanel = document.getElementById('organize-preview');
 const scopeSelect = /** @type {HTMLSelectElement | null} */ (document.getElementById('group-scope'));
 
-/** @type {object | null} */
+/**
+ * @typedef {object} PendingOrganize
+ * @property {string} scope
+ * @property {number | undefined} windowId
+ * @property {number} eligibleCount
+ * @property {number} cacheHits
+ * @property {number} cacheMisses
+ * @property {string[]} fieldsTemplate
+ * @property {unknown[]} samples
+ * @property {string} endpointBaseUrl
+ * @property {string} llmProvider
+ * @property {boolean} hasApiKey
+ */
+
+/** @type {PendingOrganize | null} */
 let pendingPreview = null;
 let organizeBusy = false;
 
@@ -50,23 +64,53 @@ function setBusy(busy) {
   organizeBusy = busy;
   if (organizeBtn) organizeBtn.disabled = busy;
   if (confirmBtn) confirmBtn.disabled = busy;
-  if (scopeSelect) scopeSelect.disabled = busy;
+  // Keep scope locked while a preview is pending so Confirm matches what was reviewed.
+  if (scopeSelect) scopeSelect.disabled = busy || Boolean(pendingPreview);
 }
 
 function hidePreview() {
   pendingPreview = null;
   if (previewPanel) previewPanel.hidden = true;
+  if (scopeSelect && !organizeBusy) scopeSelect.disabled = false;
 }
 
-function renderOrganizePreview(preview) {
-  pendingPreview = preview;
+/**
+ * Window hosting the side panel (not sender.tab — panels have no tab).
+ * @returns {Promise<number | undefined>}
+ */
+async function getPanelWindowId() {
+  try {
+    const win = await chrome.windows.getCurrent();
+    return win?.id;
+  } catch {
+    return undefined;
+  }
+}
+
+function renderOrganizePreview(preview, meta) {
+  pendingPreview = {
+    scope: meta.scope,
+    windowId: meta.windowId,
+    eligibleCount: preview.eligibleCount,
+    cacheHits: preview.cacheHits,
+    cacheMisses: preview.cacheMisses,
+    fieldsTemplate: preview.fieldsTemplate || [],
+    samples: preview.samples || [],
+    endpointBaseUrl: meta.endpointBaseUrl || '',
+    llmProvider: meta.llmProvider || '',
+    hasApiKey: Boolean(meta.hasApiKey),
+  };
   if (!previewPanel) return;
   previewPanel.hidden = false;
+  if (scopeSelect) {
+    scopeSelect.value = pendingPreview.scope;
+    scopeSelect.disabled = true;
+  }
   const summary = document.getElementById('organize-preview-summary');
   const fieldsEl = document.getElementById('organize-preview-fields');
   const samplesEl = document.getElementById('organize-preview-samples');
   if (summary) {
-    summary.textContent = `${preview.eligibleCount} eligible tabs · ${preview.cacheHits} cache hits · ${preview.cacheMisses} to classify. Fields below are what real classify would send (API key never shown).`;
+    summary.textContent = `${preview.eligibleCount} eligible tabs · ${preview.cacheHits} cache hits · ${preview.cacheMisses} to classify (scope: ${pendingPreview.scope}). Fields below are what real classify would send (API key never shown).`;
   }
   if (fieldsEl) {
     fieldsEl.innerHTML = (preview.fieldsTemplate || [])
@@ -84,17 +128,27 @@ organizeBtn?.addEventListener('click', async () => {
   setBusy(true);
   organizeStatus.textContent = 'Building privacy preview…';
   const scope = scopeSelect?.value === 'current' ? 'current' : 'all';
-  const res = await sendToBackground(MSG.PREVIEW_GROUP_PAYLOAD, { scope }).catch((err) => ({
-    ok: false,
-    error: String(err),
-  }));
+  const windowId = await getPanelWindowId();
+  const [res, cfg] = await Promise.all([
+    sendToBackground(MSG.PREVIEW_GROUP_PAYLOAD, { scope, windowId }).catch((err) => ({
+      ok: false,
+      error: String(err),
+    })),
+    sendToBackground(MSG.GET_CONFIG).catch(() => null),
+  ]);
   setBusy(false);
   if (!res?.ok) {
     organizeStatus.textContent = res?.error || 'Preview failed';
     hidePreview();
     return;
   }
-  renderOrganizePreview(res.preview);
+  renderOrganizePreview(res.preview, {
+    scope: res.preview?.scope === 'current' ? 'current' : scope,
+    windowId,
+    endpointBaseUrl: cfg?.config?.endpointBaseUrl || '',
+    llmProvider: cfg?.config?.llmProvider || '',
+    hasApiKey: Boolean(cfg?.config?.hasApiKey),
+  });
   organizeStatus.textContent = 'Review fields, then confirm to classify cache misses.';
 });
 
@@ -105,25 +159,31 @@ cancelBtn?.addEventListener('click', () => {
 
 confirmBtn?.addEventListener('click', async () => {
   if (organizeBusy || !pendingPreview) return;
+  const pending = pendingPreview;
   setBusy(true);
   organizeStatus.textContent = 'Organizing…';
 
-  // Request endpoint host permission in the user-gesture turn (MV3 requirement).
-  const cfg = await sendToBackground(MSG.GET_CONFIG).catch(() => null);
-  const endpoint = cfg?.config?.endpointBaseUrl || '';
-  if (endpoint && cfg?.config?.hasApiKey && cfg?.config?.llmProvider) {
-    const allowed = await ensureEndpointPermission(endpoint);
+  // FIRST await must be permissions.request to preserve the click user gesture.
+  // Do not await GET_CONFIG / contains here — config was cached at preview time.
+  if (pending.hasApiKey && pending.llmProvider) {
+    const allowed = await requestOrganizePermissions({
+      endpointBaseUrl: pending.endpointBaseUrl,
+      provider: pending.llmProvider,
+      includeExtractHosts: true,
+    });
     if (!allowed) {
       setBusy(false);
+      // Keep preview open so the user can retry Confirm after granting.
+      if (scopeSelect) scopeSelect.disabled = true;
       organizeStatus.textContent =
-        'Host permission for the LLM endpoint was denied. Grant access, then confirm again.';
+        'Host permission denied. Grant LLM + page access, then Confirm again.';
       return;
     }
   }
 
-  const scope = scopeSelect?.value === 'current' ? 'current' : 'all';
   const res = await sendToBackground(MSG.GROUP_TABS, {
-    scope,
+    scope: pending.scope,
+    windowId: pending.windowId,
     confirmed: true,
   }).catch((err) => ({ ok: false, error: String(err) }));
   setBusy(false);

@@ -7,6 +7,7 @@
 import { EXCERPT_HARD_CAP_CHARS } from './constants.js';
 import { capExcerpt } from './topic-cache.js';
 import { formatTopicLabel } from './topic-normalize.js';
+import { resolveEndpointBaseUrl, DEFAULT_ENDPOINT_BY_PROVIDER } from './permissions.js';
 
 /**
  * @typedef {object} ClassifyInput
@@ -209,7 +210,11 @@ export class AnthropicLlmClient extends LlmClient {
    * @param {ClassifyInput} input
    */
   buildRequest(input) {
-    const url = joinEndpoint(this.config.endpointBaseUrl || 'https://api.anthropic.com', '/v1/messages');
+    const base = resolveEndpointBaseUrl(
+      this.config.endpointBaseUrl,
+      'anthropic',
+    ) || DEFAULT_ENDPOINT_BY_PROVIDER.anthropic;
+    const url = joinEndpoint(base, '/v1/messages');
     const body = {
       model: this.config.model,
       max_tokens: 200,
@@ -271,7 +276,11 @@ export class OpenAiResponsesLlmClient extends LlmClient {
    * @param {ClassifyInput} input
    */
   buildRequest(input) {
-    const url = joinEndpoint(this.config.endpointBaseUrl || 'https://api.openai.com', '/v1/responses');
+    const base = resolveEndpointBaseUrl(
+      this.config.endpointBaseUrl,
+      'openai-responses',
+    ) || DEFAULT_ENDPOINT_BY_PROVIDER['openai-responses'];
+    const url = joinEndpoint(base, '/v1/responses');
     const body = {
       model: this.config.model,
       instructions: CLASSIFY_SYSTEM_PROMPT,

@@ -19,7 +19,7 @@ import {
 } from '../shared/physical-groups.js';
 import { mergeTopicResult, heuristicTopicsAreSynonyms } from '../shared/topic-normalize.js';
 import { buildClassifyPayloadPreview, createLlmClient } from '../shared/llm-client.js';
-import { ensureEndpointPermission } from '../shared/permissions.js';
+import { hasEndpointPermission } from '../shared/permissions.js';
 import { capExcerpt, persistTopicCache } from '../shared/topic-cache.js';
 import { extractTabContent } from '../content/extract.js';
 
@@ -313,11 +313,10 @@ export async function groupTabsOnDemand(opts) {
   // Permission grant happens in Side Panel user-gesture; SW only checks containment.
   const useMock = opts.llmOpts?.useMock === true || !config.apiKey || !config.llmProvider;
   if (!useMock) {
-    const allowed = await ensureEndpointPermission(
+    const allowed = await hasEndpointPermission(
       /** @type {string} */ (config.endpointBaseUrl || ''),
+      /** @type {string} */ (config.llmProvider || ''),
     );
-    // ensureEndpointPermission calls request() if missing — may no-op without gesture;
-    // Side Panel already requested on Confirm. If still missing, fail clearly.
     if (!allowed) {
       return {
         ok: false,

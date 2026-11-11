@@ -19,6 +19,7 @@ export const STORAGE_KEYS = Object.freeze({
 export const SESSION_KEYS = Object.freeze({
   RUNTIME: 'runtime',
   CLOSING_TAB_IDS: 'closingTabIds',
+  LAST_ORGANIZE: 'lastOrganize',
 });
 
 /**

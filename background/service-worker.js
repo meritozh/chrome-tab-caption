@@ -49,6 +49,20 @@ async function hydrateFromStorage() {
   const config = await loadConfig();
   topicCache = await loadTopicCache(config.cacheSize);
   stackStore = new StackRecordStore(config.stackSize);
+  // Restore logical topics across SW restarts (session-scoped).
+  try {
+    const stored = await chrome.storage.session.get(SESSION_KEYS.LAST_ORGANIZE);
+    const last = stored?.[SESSION_KEYS.LAST_ORGANIZE];
+    if (last && Array.isArray(last.logical)) {
+      lastOrganizeState = {
+        logical: last.logical,
+        latestWinsAt: last.latestWinsAt ?? null,
+        latestWinsSource: last.latestWinsSource ?? last.source ?? null,
+      };
+    }
+  } catch {
+    // session storage may be unavailable
+  }
   // stackRecords hydrate lands in Phase 4
 }
 
@@ -63,25 +77,42 @@ function ensureHydrated() {
 }
 
 /**
- * Persist latest-wins organize metadata in session (best-effort).
+ * Persist latest-wins organize result (full logical views) in session.
  * @param {Record<string, unknown>} state
  */
 async function rememberOrganizeState(state) {
-  lastOrganizeState = /** @type {any} */ (state);
+  lastOrganizeState = {
+    logical: Array.isArray(state.logical) ? state.logical : [],
+    latestWinsAt: state.latestWinsAt ?? Date.now(),
+    latestWinsSource: state.latestWinsSource ?? 'extension-organize',
+  };
   try {
-    const prev = (await chrome.storage.session.get(SESSION_KEYS.RUNTIME))[SESSION_KEYS.RUNTIME] || {};
     await chrome.storage.session.set({
-      [SESSION_KEYS.RUNTIME]: {
-        ...prev,
-        lastOrganize: {
-          at: state.latestWinsAt,
-          source: state.latestWinsSource,
-          topicCount: Array.isArray(state.logical) ? state.logical.length : 0,
-        },
+      [SESSION_KEYS.LAST_ORGANIZE]: {
+        logical: lastOrganizeState.logical,
+        latestWinsAt: lastOrganizeState.latestWinsAt,
+        latestWinsSource: lastOrganizeState.latestWinsSource,
       },
     });
   } catch {
     // session storage may be unavailable in tests
+  }
+}
+
+/**
+ * Prefer explicit windowId from Side Panel; fall back to sender.tab / getCurrent.
+ * @param {any} message
+ * @param {chrome.runtime.MessageSender} sender
+ * @returns {Promise<number | undefined>}
+ */
+async function resolveCurrentWindowId(message, sender) {
+  if (typeof message?.windowId === 'number') return message.windowId;
+  if (typeof sender?.tab?.windowId === 'number') return sender.tab.windowId;
+  try {
+    const win = await chrome.windows.getCurrent();
+    return win?.id;
+  } catch {
+    return undefined;
   }
 }
 
@@ -186,9 +217,10 @@ function onMessage(message, sender, sendResponse) {
       }
       case MSG.PREVIEW_GROUP_PAYLOAD: {
         const config = await loadConfig();
+        const currentWindowId = await resolveCurrentWindowId(message, sender);
         const preview = await buildGroupPayloadPreview({
           scope: message.scope === 'current' ? 'current' : 'all',
-          currentWindowId: sender.tab?.windowId,
+          currentWindowId,
           topicCache,
           config,
         });
@@ -208,9 +240,10 @@ function onMessage(message, sender, sendResponse) {
         if (config.groupOnDemandOnly === false) {
           // Still never auto-group; flag is informational for Phase 2.
         }
+        const currentWindowId = await resolveCurrentWindowId(message, sender);
         const result = await groupTabsOnDemand({
           scope: message.scope === 'current' ? 'current' : 'all',
-          currentWindowId: sender.tab?.windowId,
+          currentWindowId,
           confirmed: true,
           topicCache,
           config,
