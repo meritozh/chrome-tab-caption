@@ -333,6 +333,11 @@ confirmBtn?.addEventListener('click', async () => {
 });
 
 onBackgroundBroadcast((message) => {
+  if (message.type === MSG.STACKS_OVERFLOW_WARN) {
+    showStacksOverflow(message);
+    refreshStacks();
+    return;
+  }
   if (message.type === MSG.CONFIG_UPDATED && pendingPreview) {
     organizeRunId += 1;
     hidePreview();
@@ -462,9 +467,7 @@ function renderSearchResults(res, query, fail = null) {
 function renderSearchPartition(label, hits, indexOffset) {
   if (!hits.length) {
     const empty =
-      label === 'Stacked'
-        ? 'No stacked matches (Stacks reclaim lands in Phase 4).'
-        : 'No open-tab matches.';
+      label === 'Stacked' ? 'No stacked matches.' : 'No open-tab matches.';
     return `<div class="sp-search-section"><h3 class="sp-search-heading">${escapeHtml(
       label,
     )}</h3><p class="sp-muted">${escapeHtml(empty)}</p></div>`;
@@ -521,9 +524,10 @@ async function activateSearchHit(hit) {
     }));
     setSearchStatus(
       res?.ok
-        ? `Recalled stack ${hit.stackId}`
-        : res?.error || 'Recall stub — reclaim lands in Phase 4.',
+        ? `Recalled: ${hit.title || hit.url}${res.groupRestore?.restored ? ' (group restored)' : ''}`
+        : res?.error || 'Recall failed',
     );
+    if (res?.ok) refreshStacks();
     return;
   }
   setSearchStatus('Nothing to activate.');
@@ -593,18 +597,128 @@ document.getElementById('btn-preview')?.addEventListener('click', async () => {
   out.textContent = JSON.stringify(res?.preview ?? res, null, 2);
 });
 
+/**
+ * @param {object | null | undefined} pending
+ */
+function showStacksOverflow(pending) {
+  const panel = document.getElementById('stacks-overflow');
+  const summary = document.getElementById('stacks-overflow-summary');
+  if (!panel) return;
+  if (!pending?.needsUserAction) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  if (summary) {
+    const count = pending.stackCount ?? '—';
+    const max = pending.stackSize ?? '—';
+    const blocked = pending.blocked ?? 1;
+    summary.textContent = `Archive at capacity (${count}/${max}). Choose export or discard to free space for ${blocked} more reclaim(s). Reclaim is paused until then.`;
+  }
+}
+
+function setStacksStatus(text) {
+  const el = document.getElementById('stacks-status');
+  if (!el) return;
+  el.hidden = !text;
+  el.textContent = text || '';
+}
+
+/**
+ * Trigger browser download for exported stacks JSON.
+ * @param {string} json
+ */
+function downloadStacksExport(json) {
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `tab-caption-stacks-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function resolveStacksOverflow(action) {
+  setStacksStatus(action === 'export' ? 'Exporting…' : 'Discarding oldest…');
+  const res = await sendToBackground(MSG.EXPORT_OR_DISCARD_STACKS, { action }).catch((err) => ({
+    ok: false,
+    error: String(err),
+  }));
+  if (!res?.ok) {
+    setStacksStatus(res?.error || 'Overflow action failed');
+    return;
+  }
+  if (action === 'export' && typeof res.exportJson === 'string') {
+    downloadStacksExport(res.exportJson);
+  }
+  showStacksOverflow(null);
+  setStacksStatus(
+    action === 'export'
+      ? `Exported and freed ${res.discarded ?? 0} oldest record(s).`
+      : `Discarded ${res.discarded ?? 0} oldest record(s).`,
+  );
+  await refreshStacks();
+}
+
+document.getElementById('btn-stacks-export')?.addEventListener('click', () => {
+  resolveStacksOverflow('export');
+});
+document.getElementById('btn-stacks-discard')?.addEventListener('click', () => {
+  resolveStacksOverflow('discard');
+});
+
+async function recallStackById(stackId, title) {
+  const res = await sendToBackground(MSG.RECALL_STACK, { stackId }).catch((err) => ({
+    ok: false,
+    error: String(err),
+  }));
+  setStacksStatus(
+    res?.ok
+      ? `Recalled: ${title || stackId}${res.groupRestore?.restored ? ' (group restored)' : ''}`
+      : res?.error || 'Recall failed',
+  );
+  if (res?.ok) await refreshStacks();
+}
+
 async function refreshStacks() {
   const list = document.getElementById('stacks-list');
+  if (!list) return;
   const res = await sendToBackground(MSG.GET_STACKS).catch(() => null);
   const stacks = res?.stacks ?? [];
+  showStacksOverflow(res?.overflowPending);
+
   if (!stacks.length) {
-    list.innerHTML = '<li class="sp-muted">No stacked tabs yet (reclaim lands in Phase 4).</li>';
+    list.innerHTML =
+      '<li class="sp-muted">No stacked tabs yet — reclaim runs when open tabs exceed maxOpenTabs.</li>';
     return;
   }
   list.innerHTML = stacks
-    .map((s) => `<li><strong>${escapeHtml(s.title || s.url)}</strong><br /><span class="sp-muted">${escapeHtml(s.url)}</span></li>`)
+    .map((s) => {
+      const meta = [s.topicLabel || s.groupTitle, s.url].filter(Boolean).join(' · ');
+      return `<li class="sp-stack-item" data-stack-id="${escapeHtml(s.id)}">
+        <div>
+          <strong>${escapeHtml(s.title || s.url)}</strong><br />
+          <span class="sp-muted">${escapeHtml(meta)}</span>
+        </div>
+        <div class="sp-stack-actions">
+          <button type="button" class="sp-secondary sp-stack-recall" data-stack-id="${escapeHtml(s.id)}">Recall</button>
+        </div>
+      </li>`;
+    })
     .join('');
 }
+
+document.getElementById('stacks-list')?.addEventListener('click', (e) => {
+  const btn = /** @type {HTMLElement | null} */ (
+    e.target instanceof Element ? e.target.closest('.sp-stack-recall') : null
+  );
+  if (!btn) return;
+  const stackId = btn.getAttribute('data-stack-id');
+  if (!stackId) return;
+  const item = btn.closest('.sp-stack-item');
+  const title = item?.querySelector('strong')?.textContent || stackId;
+  recallStackById(stackId, title);
+});
 
 function escapeHtml(s) {
   return String(s)

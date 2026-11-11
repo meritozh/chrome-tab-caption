@@ -12,7 +12,8 @@ On-demand LLM topic grouping for Chrome tabs: organize when you ask, cache what 
 | **Search** | 内存模糊搜索（拼音/首字母）+ 按最近使用排序；Open / Stacked 分区 | In-memory fuzzy + pinyin/initials, recency-first; Open / Stacked results |
 | **Cache** | `urlKey` + content hash LRU，避免重复打 LLM | Topic cache so the same page isn’t reclassified |
 | **Privacy** | 自配 endpoint；API key 仅存本地；发送前字段预览 | Your endpoint, local key, always preview payload fields |
-| **Roadmap** | 自动去重 · Stacks 回收/召回 | Auto-dedupe · Stacks reclaim/recall |
+| **Stacks** | 超过 `maxOpenTabs` 时回收到可搜索归档；召回恢复分组；触及 `stackSize` 先警告再导出/丢弃 | Reclaim past maxOpenTabs into searchable archive; recall restores groups; overflow warns then export/discard |
+| **Roadmap** | 自动去重 | Auto-dedupe |
 
 Product decisions live in the Project ADR (`docs/tab-manager-adr.md`). Chrome Web Store packaging notes: `docs/chrome-web-store-checklist.md`.
 
@@ -30,8 +31,16 @@ Product decisions live in the Project ADR (`docs/tab-manager-adr.md`). Chrome We
 
 1. Open the Side Panel and a few tabs (try a Chinese title for pinyin, e.g. “今日头条”)
 2. In **Search**, type a substring, fuzzy fragment, full pinyin, or initials (`jrtt`)
-3. Results split into **Open** (live tabs) and **Stacked** (this extension’s `stackRecords` — empty until Phase 4 reclaim)
-4. Use **↑ / ↓** then **Enter** (or click) to focus an open tab; Stacked Enter calls the Phase 4 `RECALL_STACK` stub
+3. Results split into **Open** (live tabs) and **Stacked** (this extension’s `stackRecords`)
+4. Use **↑ / ↓** then **Enter** (or click) to focus an open tab or recall a stacked one
+
+### Try Stacks (Side Panel)
+
+1. Options → set `maxOpenTabs` low (e.g. `3`) for a quick demo → Save
+2. Open more tabs than that threshold; the service worker reclaims least-recently-accessed tabs (skips pinned / audible / unsaved)
+3. Side Panel → **Stacks** lists reclaimed records; **Recall** restores the URL and group metadata
+4. Search → **Stacked** hits use the same `RECALL_STACK` path
+5. If the archive hits `stackSize`, choose **Export oldest & free space** or **Discard oldest**
 
 ```bash
 npm test

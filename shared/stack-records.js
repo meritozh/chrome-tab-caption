@@ -1,7 +1,11 @@
 /**
- * StackRecords interface — tabs reclaimed by this extension (ADR §5.6).
- * Not chrome.sessions / recently-closed. Pure stub for Phase 0/1.
+ * StackRecords — tabs reclaimed by this extension (ADR §5.6).
+ * Not chrome.sessions / recently-closed.
+ * Overflow: never silent LRU — caller warns → user export or discard.
  */
+
+import { STORAGE_KEYS } from './constants.js';
+import { evaluateStackCapacity } from './reclaim-policy.js';
 
 /**
  * @typedef {object} StackRecord
@@ -40,7 +44,7 @@ export function createStackRecord(partial) {
 }
 
 /**
- * In-memory stack store with soft capacity. Overflow warn is UI/SW concern.
+ * In-memory stack store with hard capacity (no silent eviction on push).
  */
 export class StackRecordStore {
   /** @param {number} [maxSize] */
@@ -65,6 +69,32 @@ export class StackRecordStore {
   }
 
   /**
+   * Capacity check without mutating.
+   * @param {number} [incoming]
+   */
+  capacityFor(incoming = 1) {
+    return evaluateStackCapacity({
+      size: this._records.length,
+      maxSize: this.maxSize,
+      incoming,
+    });
+  }
+
+  /**
+   * Push only when under capacity. Refuses when at maxSize (overflow warn path).
+   * @param {StackRecord} record
+   * @returns {{ record: StackRecord | null, accepted: boolean, wouldOverflow: boolean }}
+   */
+  tryPush(record) {
+    if (this._records.length >= this.maxSize) {
+      return { record: null, accepted: false, wouldOverflow: true };
+    }
+    this._records.unshift(record);
+    return { record, accepted: true, wouldOverflow: false };
+  }
+
+  /**
+   * Unconditional push (tests / import). Prefer tryPush for reclaim.
    * @param {StackRecord} record
    * @returns {{ record: StackRecord, wouldOverflow: boolean }}
    */
@@ -74,9 +104,10 @@ export class StackRecordStore {
     return { record, wouldOverflow };
   }
 
-  /** Discard oldest N records (after user confirms overflow discard). */
+  /** Discard oldest N records (after user confirms overflow discard / export). */
   discardOldest(count = 1) {
-    const n = Math.max(0, count);
+    const n = Math.max(0, Math.min(this._records.length, Math.floor(Number(count) || 0)));
+    if (n <= 0) return [];
     return this._records.splice(-n, n);
   }
 
@@ -88,11 +119,25 @@ export class StackRecordStore {
   }
 
   /**
-   * Stub export payload (JSON). Real export UX in Phase 4.
+   * Export payload (JSON). Used by overflow export CTA.
+   * @param {{ oldestOnly?: number } | null} [opts]
    * @returns {string}
    */
-  exportJson() {
-    return JSON.stringify({ version: 1, stacks: this._records }, null, 2);
+  exportJson(opts = null) {
+    let stacks = this._records;
+    const oldestOnly = opts?.oldestOnly;
+    if (typeof oldestOnly === 'number' && oldestOnly > 0) {
+      stacks = this._records.slice(-oldestOnly);
+    }
+    return JSON.stringify(
+      {
+        version: 1,
+        exportedAt: Date.now(),
+        stacks,
+      },
+      null,
+      2,
+    );
   }
 
   toJSON() {
@@ -107,4 +152,40 @@ export class StackRecordStore {
     store._records = Array.isArray(raw?.records) ? [...raw.records] : [];
     return store;
   }
+}
+
+/**
+ * @param {number} [maxSize]
+ * @param {typeof chrome.storage | undefined} storage
+ * @returns {Promise<StackRecordStore>}
+ */
+export async function loadStackRecords(maxSize = 500, storage = globalThis.chrome?.storage) {
+  const store = new StackRecordStore(maxSize);
+  if (!storage?.local) return store;
+  const result = await storage.local.get(STORAGE_KEYS.STACK_RECORDS);
+  const raw = result[STORAGE_KEYS.STACK_RECORDS];
+  if (raw && typeof raw === 'object') {
+    const loaded = StackRecordStore.fromJSON({
+      maxSize: raw.maxSize ?? maxSize,
+      records: Array.isArray(raw.records) ? raw.records : [],
+    });
+    loaded.maxSize = Math.max(1, maxSize);
+    // Soft-trim only on hydrate if config shrunk — prefer warn path at runtime.
+    if (loaded.size > loaded.maxSize) {
+      loaded.discardOldest(loaded.size - loaded.maxSize);
+    }
+    return loaded;
+  }
+  return store;
+}
+
+/**
+ * @param {StackRecordStore} store
+ * @param {typeof chrome.storage | undefined} storage
+ */
+export async function persistStackRecords(store, storage = globalThis.chrome?.storage) {
+  if (!storage?.local || !store) return;
+  await storage.local.set({
+    [STORAGE_KEYS.STACK_RECORDS]: store.toJSON(),
+  });
 }

@@ -1,16 +1,17 @@
 /**
- * Service worker orchestrator (ADR Phase 0–3).
+ * Service worker orchestrator (ADR Phase 0–4).
  * Unique orchestration center: events, debounce, jobs, LLM, Chrome side-effects.
  * UI only sends MSG.* — keys & tab mutations stay here.
  * Grouping is on-demand only — never auto-group on tab complete.
  * Phase 3: fuzzy + pinyin search over open tabs and stackRecords.
+ * Phase 4: Stacks reclaim / recall; overflow warn → export or discard.
  */
 
 import { MSG, DEFAULT_CONFIG, SESSION_KEYS, TIMEOUTS, STORAGE_KEYS } from '../shared/constants.js';
 import { loadConfig, saveConfig, redactConfigForUi, mergeConfig } from '../shared/config.js';
 import { buildClassifyPayloadPreview, createLlmClient } from '../shared/llm-client.js';
 import { TopicCacheLru, loadTopicCache, persistTopicCache } from '../shared/topic-cache.js';
-import { StackRecordStore } from '../shared/stack-records.js';
+import { StackRecordStore, loadStackRecords, persistStackRecords } from '../shared/stack-records.js';
 import { normalizeUrlKey, computeContentHash } from '../shared/url-normalize.js';
 import { isEligibleTab } from '../shared/tab-eligibility.js';
 import {
@@ -19,7 +20,7 @@ import {
 } from './grouping.js';
 import { formatOrganizeCancelMessage } from '../shared/organize-cancel.js';
 import { runSearchQuery } from './search.js';
-import { recallStack } from './stacks.js';
+import { maybeReclaim, recallStack, exportOrDiscardStacks } from './stacks.js';
 
 /** @type {TopicCacheLru} */
 let topicCache = new TopicCacheLru(DEFAULT_CONFIG.cacheSize);
@@ -29,7 +30,7 @@ let stackStore = new StackRecordStore(DEFAULT_CONFIG.stackSize);
 /** @type {{ logical: import('../shared/physical-groups.js').PhysicalGroupPlan[] | unknown[], latestWinsAt: number, source: string } | null} */
 let lastOrganizeState = null;
 
-/** Runtime: tabs we are closing (dedupe/reclaim) — suppress recall pollution later. */
+/** Runtime: tabs we are closing (dedupe/reclaim) — suppressClosed recall pollution. */
 /** @type {Set<number>} */
 const closingTabIds = new Set();
 
@@ -37,6 +38,16 @@ const closingTabIds = new Set();
 let cacheSyncTimer = null;
 /** @type {Map<number, { url?: string, title?: string }>} */
 const pendingTabSync = new Map();
+
+/** Debounced reclaim after tab count changes (ADR classifyDebounceMs). */
+/** @type {ReturnType<typeof setTimeout> | number | null} */
+let reclaimTimer = null;
+/** @type {Promise<unknown> | null} */
+let reclaimInFlight = null;
+
+/** Persisted overflow gate — reclaim pauses until export/discard. */
+/** @type {object | null} */
+let overflowPending = null;
 
 /** @type {Promise<void> | null} */
 let hydratePromise = null;
@@ -64,10 +75,13 @@ async function initPanelBehavior() {
 async function hydrateFromStorage() {
   const config = await loadConfig();
   topicCache = await loadTopicCache(config.cacheSize);
-  stackStore = await loadStackStore(config.stackSize);
+  stackStore = await loadStackRecords(config.stackSize);
   // Restore logical topics across SW restarts (session-scoped).
   try {
-    const stored = await chrome.storage.session.get(SESSION_KEYS.LAST_ORGANIZE);
+    const stored = await chrome.storage.session.get([
+      SESSION_KEYS.LAST_ORGANIZE,
+      SESSION_KEYS.STACKS_OVERFLOW_PENDING,
+    ]);
     const last = stored?.[SESSION_KEYS.LAST_ORGANIZE];
     if (last && Array.isArray(last.logical)) {
       lastOrganizeState = {
@@ -76,32 +90,12 @@ async function hydrateFromStorage() {
         latestWinsSource: last.latestWinsSource ?? last.source ?? null,
       };
     }
+    const pending = stored?.[SESSION_KEYS.STACKS_OVERFLOW_PENDING];
+    overflowPending =
+      pending && typeof pending === 'object' && pending.needsUserAction ? pending : null;
   } catch {
     // session storage may be unavailable
   }
-}
-
-/**
- * Hydrate StackRecordStore when Phase 4 persistence is present; else empty shell.
- * @param {number} maxSize
- */
-async function loadStackStore(maxSize) {
-  const store = new StackRecordStore(maxSize);
-  try {
-    const raw = await chrome.storage.local.get(STORAGE_KEYS.STACK_RECORDS);
-    const payload = raw?.[STORAGE_KEYS.STACK_RECORDS];
-    if (payload && typeof payload === 'object') {
-      const loaded = StackRecordStore.fromJSON({
-        maxSize: payload.maxSize ?? maxSize,
-        records: Array.isArray(payload.records) ? payload.records : [],
-      });
-      loaded.maxSize = Math.max(1, maxSize);
-      return loaded;
-    }
-  } catch {
-    // storage unavailable — empty stacks ready for Phase 4 reclaim
-  }
-  return store;
 }
 
 function ensureHydrated() {
@@ -112,6 +106,24 @@ function ensureHydrated() {
     });
   }
   return hydratePromise;
+}
+
+/**
+ * @param {object | null} pending
+ */
+async function setOverflowPending(pending) {
+  overflowPending = pending;
+  try {
+    if (pending) {
+      await chrome.storage.session.set({
+        [SESSION_KEYS.STACKS_OVERFLOW_PENDING]: pending,
+      });
+    } else {
+      await chrome.storage.session.remove(SESSION_KEYS.STACKS_OVERFLOW_PENDING);
+    }
+  } catch {
+    // session storage may be unavailable in tests
+  }
 }
 
 /**
@@ -204,6 +216,40 @@ async function flushCacheSync() {
 }
 
 /**
+ * Schedule reclaim after tab create/remove (debounce = classifyDebounceMs).
+ */
+function scheduleReclaim() {
+  if (reclaimTimer) clearTimeout(reclaimTimer);
+  reclaimTimer = setTimeout(() => {
+    reclaimTimer = null;
+    runReclaimPass().catch((err) => {
+      console.warn('[tab-caption] reclaim failed', err);
+    });
+  }, TIMEOUTS.CACHE_SYNC_DEBOUNCE_MS);
+}
+
+async function runReclaimPass() {
+  await ensureHydrated();
+  if (reclaimInFlight) {
+    await reclaimInFlight.catch(() => {});
+  }
+  const config = await loadConfig();
+  reclaimInFlight = maybeReclaim({
+    config,
+    stackStore,
+    topicCache,
+    closingTabIds,
+    overflowPending,
+    setOverflowPending,
+  });
+  try {
+    return await reclaimInFlight;
+  } finally {
+    reclaimInFlight = null;
+  }
+}
+
+/**
  * Message router — keep surface stable.
  * @param {any} message
  * @param {chrome.runtime.MessageSender} sender
@@ -231,7 +277,24 @@ function onMessage(message, sender, sendResponse) {
         topicCache._evict();
         await persistTopicCache(topicCache);
         stackStore.maxSize = Math.max(1, Number(next.stackSize) || DEFAULT_CONFIG.stackSize);
+        // Soft-trim only when user shrinks stackSize below current count after explicit save —
+        // runtime reclaim still uses warn→export/discard for growth overflow.
+        if (stackStore.size > stackStore.maxSize) {
+          await setOverflowPending({
+            needsUserAction: true,
+            reason: 'at_capacity',
+            blocked: stackStore.size - stackStore.maxSize,
+            stackSize: stackStore.maxSize,
+            stackCount: stackStore.size,
+            at: Date.now(),
+          });
+          chrome.runtime
+            .sendMessage({ type: MSG.STACKS_OVERFLOW_WARN, ...overflowPending })
+            .catch(() => {});
+        }
+        await persistStackRecords(stackStore);
         chrome.runtime.sendMessage({ type: MSG.CONFIG_UPDATED }).catch(() => {});
+        scheduleReclaim();
         sendResponse({ ok: true, config: redactConfigForUi(next) });
         break;
       }
@@ -366,6 +429,7 @@ function onMessage(message, sender, sendResponse) {
             latestWinsSource: 'extension-organize-cancelled',
           });
         }
+        scheduleReclaim();
         sendResponse(result);
         break;
       }
@@ -411,23 +475,34 @@ function onMessage(message, sender, sendResponse) {
         sendResponse({
           ok: true,
           stacks: stackStore.list(),
-          stub: stackStore.size === 0,
+          overflowPending,
+          stub: false,
         });
         break;
       }
       case MSG.RECALL_STACK: {
-        // Phase 4 implements full reclaim/recall; Phase 3 wires the stub for search Enter.
         const stackId = String(message.stackId ?? '');
-        const result = await recallStack(stackId);
+        const windowId = await resolveCurrentWindowId(message, sender);
+        const result = await recallStack(stackId, {
+          stackStore,
+          windowId,
+        });
         sendResponse(result);
         break;
       }
       case MSG.EXPORT_OR_DISCARD_STACKS: {
-        sendResponse({
-          ok: false,
-          stub: true,
-          error: 'EXPORT_OR_DISCARD_STACKS not implemented yet (Phase 4).',
+        const action = message.action === 'export' ? 'export' : 'discard';
+        const result = await exportOrDiscardStacks({
+          action,
+          stackStore,
+          overflowPending,
+          setOverflowPending,
+          count: message.count,
         });
+        if (result.ok) {
+          scheduleReclaim();
+        }
+        sendResponse(result);
         break;
       }
       case MSG.TEST_LLM: {
@@ -497,10 +572,28 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   scheduleCacheSync(tabId, changeInfo, tab);
 });
 
+chrome.tabs.onCreated.addListener(() => {
+  scheduleReclaim();
+});
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   pendingTabSync.delete(tabId);
   closingTabIds.delete(tabId);
+  // After user/extension close, open count may drop below max — clear path for later.
+  scheduleReclaim();
 });
+
+// Periodic maintenance wake (MV3 SW) — reclaim / overflow resume.
+try {
+  chrome.alarms.create('tab-caption-maintain', { periodInMinutes: 1 });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm?.name === 'tab-caption-maintain') {
+      scheduleReclaim();
+    }
+  });
+} catch {
+  // alarms may be unavailable in some test environments
+}
 
 // Eager init for SW cold start
 initPanelBehavior();
@@ -515,4 +608,6 @@ export {
   SESSION_KEYS,
   STORAGE_KEYS,
   ensureHydrated,
+  scheduleReclaim,
+  runReclaimPass,
 };
