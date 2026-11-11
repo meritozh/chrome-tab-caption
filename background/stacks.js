@@ -19,6 +19,7 @@ import {
 } from '../shared/reclaim-policy.js';
 import { normalizeUrlKey, computeContentHash } from '../shared/url-normalize.js';
 import { colorForTopicKey } from '../shared/physical-groups.js';
+import { suppressClosedRemove } from '../shared/suppress-closed.js';
 import { runAutoDedupe } from './dedupe.js';
 
 /**
@@ -180,24 +181,6 @@ export async function restoreGroupMetadata(tabId, windowId, meta) {
 }
 
 /**
- * Close a tab while marking suppressClosed via closingTabIds.
- * @param {number} tabId
- * @param {Set<number>} closingTabIds
- * @param {typeof chrome.tabs} [tabsApi]
- */
-export async function suppressClosedRemove(tabId, closingTabIds, tabsApi = globalThis.chrome?.tabs) {
-  if (!tabsApi?.remove) throw new Error('tabs.remove unavailable');
-  closingTabIds.add(tabId);
-  try {
-    await tabsApi.remove(tabId);
-    return { ok: true, tabId, suppressClosed: true };
-  } catch (err) {
-    closingTabIds.delete(tabId);
-    return { ok: false, tabId, suppressClosed: false, error: String(err?.message || err) };
-  }
-}
-
-/**
  * Broadcast overflow warning to Side Panel (fail-soft).
  * @param {Record<string, unknown>} payload
  */
@@ -218,24 +201,36 @@ function broadcastOverflow(payload) {
  * @param {(pending: object | null) => Promise<void> | void} [opts.setOverflowPending]
  * @param {object | null} [opts.overflowPending]
  * @param {typeof chrome.tabs} [opts.tabsApi]
+ * @param {typeof chrome.windows} [opts.windowsApi]
  * @param {typeof chrome.scripting} [opts.scriptingApi]
  * @param {boolean} [opts.probeUnload]
+ * @param {{ push: (e: object) => object }} [opts.activityLog]
  */
 export async function maybeReclaim(opts) {
   const config = opts.config || {};
-  if (config.autoStackEnabled === false) {
-    return { reclaimed: 0, skipped: 'autoStackDisabled', stub: false };
-  }
-
   const stackStore = opts.stackStore;
   const closingTabIds = opts.closingTabIds;
   const tabsApi = opts.tabsApi ?? globalThis.chrome?.tabs;
-  if (!tabsApi?.query || !stackStore || !closingTabIds) {
-    return { reclaimed: 0, skipped: 'unavailable', stub: false };
+
+  // ADR order: always auto-dedupe before reclaim counting — even if stacking is off.
+  const dedupe =
+    closingTabIds != null
+      ? await runAutoDedupe({
+          config,
+          closingTabIds,
+          tabsApi,
+          windowsApi: opts.windowsApi,
+          activityLog: opts.activityLog,
+        })
+      : { closed: 0, skipped: 'noClosingSet', stub: false };
+
+  if (config.autoStackEnabled === false) {
+    return { reclaimed: 0, skipped: 'autoStackDisabled', stub: false, dedupe };
   }
 
-  // Phase 5 will close dups; stub coexists and runs first per ADR order.
-  await runAutoDedupe(closingTabIds);
+  if (!tabsApi?.query || !stackStore || !closingTabIds) {
+    return { reclaimed: 0, skipped: 'unavailable', stub: false, dedupe };
+  }
 
   if (opts.overflowPending?.needsUserAction) {
     return {
@@ -243,6 +238,7 @@ export async function maybeReclaim(opts) {
       skipped: 'overflowPending',
       overflowPending: opts.overflowPending,
       stub: false,
+      dedupe,
     };
   }
 
@@ -282,7 +278,7 @@ export async function maybeReclaim(opts) {
   });
 
   if (!targets.length) {
-    return { reclaimed: 0, candidates: 0, stub: false };
+    return { reclaimed: 0, candidates: 0, stub: false, dedupe };
   }
 
   const capacity = evaluateStackCapacity({
@@ -300,7 +296,7 @@ export async function maybeReclaim(opts) {
     });
     await opts.setOverflowPending?.(pending);
     broadcastOverflow(pending);
-    return { reclaimed: 0, overflow: true, overflowPending: pending, stub: false };
+    return { reclaimed: 0, overflow: true, overflowPending: pending, stub: false, dedupe };
   }
 
   const toReclaim = targets.slice(0, capacity.accept);
@@ -367,11 +363,15 @@ export async function maybeReclaim(opts) {
       overflowPending: pending,
       errors,
       stub: false,
+      dedupe,
     };
   }
 
-  return { reclaimed, errors, stub: false };
+  return { reclaimed, errors, stub: false, dedupe };
 }
+
+/** Re-export for tests / callers that imported from stacks. */
+export { suppressClosedRemove };
 
 function excessCap(openCount, maxOpenTabs) {
   return Math.max(0, openCount - maxOpenTabs);

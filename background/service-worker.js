@@ -1,10 +1,11 @@
 /**
- * Service worker orchestrator (ADR Phase 0–4).
+ * Service worker orchestrator (ADR Phase 0–5).
  * Unique orchestration center: events, debounce, jobs, LLM, Chrome side-effects.
  * UI only sends MSG.* — keys & tab mutations stay here.
  * Grouping is on-demand only — never auto-group on tab complete.
  * Phase 3: fuzzy + pinyin search over open tabs and stackRecords.
  * Phase 4: Stacks reclaim / recall; overflow warn → export or discard.
+ * Phase 5: Cross-window auto-dedupe (before reclaim).
  */
 
 import { MSG, DEFAULT_CONFIG, SESSION_KEYS, TIMEOUTS, STORAGE_KEYS } from '../shared/constants.js';
@@ -14,6 +15,7 @@ import { TopicCacheLru, loadTopicCache, persistTopicCache } from '../shared/topi
 import { StackRecordStore, loadStackRecords, persistStackRecords } from '../shared/stack-records.js';
 import { normalizeUrlKey, computeContentHash } from '../shared/url-normalize.js';
 import { isEligibleTab } from '../shared/tab-eligibility.js';
+import { createActivityLog } from '../shared/activity-log.js';
 import {
   buildGroupPayloadPreview,
   groupTabsOnDemand,
@@ -21,6 +23,7 @@ import {
 import { formatOrganizeCancelMessage } from '../shared/organize-cancel.js';
 import { runSearchQuery } from './search.js';
 import { maybeReclaim, recallStack, exportOrDiscardStacks } from './stacks.js';
+import { runAutoDedupe } from './dedupe.js';
 import { buildOverflowPending } from '../shared/reclaim-policy.js';
 
 /** @type {TopicCacheLru} */
@@ -35,10 +38,19 @@ let lastOrganizeState = null;
 /** @type {Set<number>} */
 const closingTabIds = new Set();
 
+/** Minimal activity log (dedupe closes, etc.). */
+const activityLog = createActivityLog();
+
 /** @type {ReturnType<typeof setTimeout> | number | null} */
 let cacheSyncTimer = null;
 /** @type {Map<number, { url?: string, title?: string }>} */
 const pendingTabSync = new Map();
+
+/** Debounced auto-dedupe after tab create / URL update (ADR classifyDebounceMs). */
+/** @type {ReturnType<typeof setTimeout> | number | null} */
+let dedupeTimer = null;
+/** @type {Promise<unknown> | null} */
+let dedupeInFlight = null;
 
 /** Debounced reclaim after tab count changes (ADR classifyDebounceMs). */
 /** @type {ReturnType<typeof setTimeout> | number | null} */
@@ -233,7 +245,39 @@ async function flushCacheSync() {
 }
 
 /**
+ * Schedule auto-dedupe after tab create / URL change (debounce = classifyDebounceMs).
+ */
+function scheduleDedupe() {
+  if (dedupeTimer) clearTimeout(dedupeTimer);
+  dedupeTimer = setTimeout(() => {
+    dedupeTimer = null;
+    runDedupePass().catch((err) => {
+      console.warn('[tab-caption] dedupe failed', err);
+    });
+  }, TIMEOUTS.CACHE_SYNC_DEBOUNCE_MS);
+}
+
+async function runDedupePass() {
+  await ensureHydrated();
+  if (dedupeInFlight) {
+    await dedupeInFlight.catch(() => {});
+  }
+  const config = await loadConfig();
+  dedupeInFlight = runAutoDedupe({
+    config,
+    closingTabIds,
+    activityLog,
+  });
+  try {
+    return await dedupeInFlight;
+  } finally {
+    dedupeInFlight = null;
+  }
+}
+
+/**
  * Schedule reclaim after tab create/remove (debounce = classifyDebounceMs).
+ * Reclaim always runs dedupe first (ADR order).
  */
 function scheduleReclaim() {
   if (reclaimTimer) clearTimeout(reclaimTimer);
@@ -250,6 +294,10 @@ async function runReclaimPass() {
   if (reclaimInFlight) {
     await reclaimInFlight.catch(() => {});
   }
+  // Let a standalone dedupe pass finish first to avoid overlapping closes.
+  if (dedupeInFlight) {
+    await dedupeInFlight.catch(() => {});
+  }
   const config = await loadConfig();
   reclaimInFlight = maybeReclaim({
     config,
@@ -258,6 +306,7 @@ async function runReclaimPass() {
     closingTabIds,
     overflowPending,
     setOverflowPending,
+    activityLog,
   });
   try {
     return await reclaimInFlight;
@@ -569,7 +618,7 @@ function onMessage(message, sender, sendResponse) {
         break;
       }
       case MSG.GET_ACTIVITY_LOG: {
-        sendResponse({ ok: true, entries: [], stub: true });
+        sendResponse({ ok: true, entries: activityLog.list(), stub: false });
         break;
       }
       default:
@@ -594,12 +643,17 @@ chrome.runtime.onStartup.addListener(() => {
 
 chrome.runtime.onMessage.addListener(onMessage);
 
-// Cache sync on URL/title updates — metadata only, never LLM / never auto-group
+// Cache sync on URL/title updates — metadata only, never LLM / never auto-group.
+// URL commits also schedule cross-window auto-dedupe (Phase 5).
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   scheduleCacheSync(tabId, changeInfo, tab);
+  if (changeInfo.url != null || changeInfo.status === 'complete') {
+    scheduleDedupe();
+  }
 });
 
 chrome.tabs.onCreated.addListener(() => {
+  scheduleDedupe();
   scheduleReclaim();
 });
 
@@ -629,12 +683,15 @@ ensureHydrated();
 // Export for tests / future modules (not used by Chrome loader)
 export {
   closingTabIds,
+  activityLog,
   topicCache,
   stackStore,
   MSG,
   SESSION_KEYS,
   STORAGE_KEYS,
   ensureHydrated,
+  scheduleDedupe,
+  runDedupePass,
   scheduleReclaim,
   runReclaimPass,
 };
