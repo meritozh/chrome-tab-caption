@@ -396,20 +396,167 @@ async function refreshLogicalTopics() {
 
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
+const searchStatus = document.getElementById('search-status');
 let searchTimer = 0;
+/** @type {number} */
+let searchRequestId = 0;
+/** @type {Array<{ partition: string, tabId?: number | null, stackId?: string | null, title?: string, url?: string, topicLabel?: string | null }>} */
+let flatSearchHits = [];
+/** @type {number} */
+let activeSearchIndex = -1;
+
+function setSearchStatus(text, { hidden = !text } = {}) {
+  if (!searchStatus) return;
+  searchStatus.hidden = hidden;
+  searchStatus.textContent = text || '';
+}
+
+/**
+ * @param {{ open?: object[], stacked?: object[] } | null} res
+ * @param {string} query
+ */
+function renderSearchResults(res, query) {
+  if (!searchResults) return;
+  const open = Array.isArray(res?.open) ? res.open : [];
+  const stacked = Array.isArray(res?.stacked) ? res.stacked : [];
+  flatSearchHits = [...open, ...stacked];
+  activeSearchIndex = flatSearchHits.length ? 0 : -1;
+
+  if (!query) {
+    searchResults.innerHTML = '<p class="sp-muted">Type to search Open tabs and Stacked records.</p>';
+    return;
+  }
+
+  if (!flatSearchHits.length) {
+    searchResults.innerHTML = `<p class="sp-muted">No matches for “${escapeHtml(query)}”.</p>`;
+    return;
+  }
+
+  const parts = [];
+  parts.push(renderSearchPartition('Open', open, 0));
+  parts.push(renderSearchPartition('Stacked', stacked, open.length));
+  searchResults.innerHTML = parts.join('');
+  syncSearchActiveClass();
+}
+
+/**
+ * @param {string} label
+ * @param {object[]} hits
+ * @param {number} indexOffset
+ */
+function renderSearchPartition(label, hits, indexOffset) {
+  if (!hits.length) {
+    const empty =
+      label === 'Stacked'
+        ? 'No stacked matches (Stacks reclaim lands in Phase 4).'
+        : 'No open-tab matches.';
+    return `<div class="sp-search-section"><h3 class="sp-search-heading">${escapeHtml(
+      label,
+    )}</h3><p class="sp-muted">${escapeHtml(empty)}</p></div>`;
+  }
+  const items = hits
+    .map((hit, i) => {
+      const flatIndex = indexOffset + i;
+      const meta = [hit.topicLabel, hit.url].filter(Boolean).join(' · ');
+      return `<button type="button" class="sp-search-item" role="option" data-flat-index="${flatIndex}" id="search-hit-${flatIndex}">
+        <span class="sp-search-title">${escapeHtml(hit.title || hit.url || '(untitled)')}</span>
+        <span class="sp-search-meta">${escapeHtml(meta)}</span>
+      </button>`;
+    })
+    .join('');
+  return `<div class="sp-search-section"><h3 class="sp-search-heading">${escapeHtml(
+    label,
+  )}</h3><div class="sp-search-list" role="listbox">${items}</div></div>`;
+}
+
+function syncSearchActiveClass() {
+  searchResults?.querySelectorAll('.sp-search-item').forEach((el) => {
+    const idx = Number(el.getAttribute('data-flat-index'));
+    el.classList.toggle('is-active', idx === activeSearchIndex);
+    if (idx === activeSearchIndex) {
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  });
+}
+
+/**
+ * @param {number} delta
+ */
+function moveSearchSelection(delta) {
+  if (!flatSearchHits.length) return;
+  const n = flatSearchHits.length;
+  activeSearchIndex = (activeSearchIndex + delta + n) % n;
+  syncSearchActiveClass();
+}
+
+async function activateSearchHit(hit) {
+  if (!hit) return;
+  if (hit.partition === 'open' && hit.tabId != null) {
+    const res = await sendToBackground(MSG.ACTIVATE_TAB, { tabId: hit.tabId }).catch((err) => ({
+      ok: false,
+      error: String(err),
+    }));
+    setSearchStatus(res?.ok ? `Focused: ${hit.title || hit.url}` : res?.error || 'Activate failed');
+    return;
+  }
+  if (hit.partition === 'stacked' && hit.stackId) {
+    const res = await sendToBackground(MSG.RECALL_STACK, { stackId: hit.stackId }).catch((err) => ({
+      ok: false,
+      error: String(err),
+    }));
+    setSearchStatus(
+      res?.ok
+        ? `Recalled stack ${hit.stackId}`
+        : res?.error || 'Recall stub — reclaim lands in Phase 4.',
+    );
+    return;
+  }
+  setSearchStatus('Nothing to activate.');
+}
+
+searchResults?.addEventListener('click', (e) => {
+  const btn = /** @type {HTMLElement | null} */ (
+    e.target instanceof Element ? e.target.closest('.sp-search-item') : null
+  );
+  if (!btn) return;
+  const idx = Number(btn.getAttribute('data-flat-index'));
+  if (!Number.isFinite(idx)) return;
+  activeSearchIndex = idx;
+  syncSearchActiveClass();
+  activateSearchHit(flatSearchHits[idx]);
+});
+
 searchInput?.addEventListener('input', () => {
   window.clearTimeout(searchTimer);
   searchTimer = window.setTimeout(async () => {
     const query = searchInput.value.trim();
+    const reqId = ++searchRequestId;
+    setSearchStatus('');
     if (!query) {
-      searchResults.innerHTML = '<p class="sp-muted">Open / Stacked results appear here (Phase 3).</p>';
+      flatSearchHits = [];
+      activeSearchIndex = -1;
+      renderSearchResults(null, '');
       return;
     }
     const res = await sendToBackground(MSG.SEARCH_QUERY, { query }).catch(() => null);
-    searchResults.innerHTML = `<p class="sp-muted">Stub search for “${escapeHtml(query)}” — ${
-      res?.note || 'Phase 3'
-    }</p>`;
-  }, 180);
+    if (reqId !== searchRequestId) return;
+    renderSearchResults(res, query);
+  }, 160);
+});
+
+searchInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    moveSearchSelection(1);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    moveSearchSelection(-1);
+  } else if (e.key === 'Enter') {
+    if (activeSearchIndex >= 0 && flatSearchHits[activeSearchIndex]) {
+      e.preventDefault();
+      activateSearchHit(flatSearchHits[activeSearchIndex]);
+    }
+  }
 });
 
 document.getElementById('btn-preview')?.addEventListener('click', async () => {
