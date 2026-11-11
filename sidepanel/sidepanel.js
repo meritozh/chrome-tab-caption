@@ -545,6 +545,8 @@ searchInput?.addEventListener('input', () => {
 });
 
 searchInput?.addEventListener('keydown', (e) => {
+  // Let IME compose (Chinese pinyin candidates, etc.) own arrows/Enter.
+  if (e.isComposing || e.keyCode === 229) return;
   if (e.key === 'ArrowDown') {
     e.preventDefault();
     moveSearchSelection(1);
