@@ -64,15 +64,21 @@
 
       <section class="sp-section" aria-labelledby="search-heading">
         <h2 id="search-heading">Search</h2>
+        <p class="sp-help">
+          Fuzzy + pinyin over open tabs and Stacks. Use ↑↓ then Enter to activate or recall.
+        </p>
         <label class="sp-sr" for="search-input">Search open tabs and stacks</label>
         <input
           id="search-input"
           type="search"
-          placeholder="Search tabs &amp; stacks (fuzzy + pinyin later)"
+          placeholder="Search title, URL, topic (pinyin OK)"
           autocomplete="off"
+          aria-controls="search-results"
+          aria-autocomplete="list"
         />
+        <p id="search-status" class="sp-status" role="status" hidden></p>
         <div id="search-results" class="sp-results" aria-live="polite">
-          <p class="sp-muted">Open / Stacked results appear here (Phase 3).</p>
+          <p class="sp-muted">Type to search Open tabs and Stacked records.</p>
         </div>
       </section>
 

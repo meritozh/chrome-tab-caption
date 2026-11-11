@@ -1,8 +1,9 @@
 /**
- * Service worker orchestrator (ADR Phase 0–2).
+ * Service worker orchestrator (ADR Phase 0–3).
  * Unique orchestration center: events, debounce, jobs, LLM, Chrome side-effects.
  * UI only sends MSG.* — keys & tab mutations stay here.
  * Grouping is on-demand only — never auto-group on tab complete.
+ * Phase 3: fuzzy + pinyin search over open tabs and stackRecords.
  */
 
 import { MSG, DEFAULT_CONFIG, SESSION_KEYS, TIMEOUTS, STORAGE_KEYS } from '../shared/constants.js';
@@ -17,6 +18,8 @@ import {
   groupTabsOnDemand,
 } from './grouping.js';
 import { formatOrganizeCancelMessage } from '../shared/organize-cancel.js';
+import { runSearchQuery } from './search.js';
+import { recallStack } from './stacks.js';
 
 /** @type {TopicCacheLru} */
 let topicCache = new TopicCacheLru(DEFAULT_CONFIG.cacheSize);
@@ -61,7 +64,7 @@ async function initPanelBehavior() {
 async function hydrateFromStorage() {
   const config = await loadConfig();
   topicCache = await loadTopicCache(config.cacheSize);
-  stackStore = new StackRecordStore(config.stackSize);
+  stackStore = await loadStackStore(config.stackSize);
   // Restore logical topics across SW restarts (session-scoped).
   try {
     const stored = await chrome.storage.session.get(SESSION_KEYS.LAST_ORGANIZE);
@@ -76,7 +79,29 @@ async function hydrateFromStorage() {
   } catch {
     // session storage may be unavailable
   }
-  // stackRecords hydrate lands in Phase 4
+}
+
+/**
+ * Hydrate StackRecordStore when Phase 4 persistence is present; else empty shell.
+ * @param {number} maxSize
+ */
+async function loadStackStore(maxSize) {
+  const store = new StackRecordStore(maxSize);
+  try {
+    const raw = await chrome.storage.local.get(STORAGE_KEYS.STACK_RECORDS);
+    const payload = raw?.[STORAGE_KEYS.STACK_RECORDS];
+    if (payload && typeof payload === 'object') {
+      const loaded = StackRecordStore.fromJSON({
+        maxSize: payload.maxSize ?? maxSize,
+        records: Array.isArray(payload.records) ? payload.records : [],
+      });
+      loaded.maxSize = Math.max(1, maxSize);
+      return loaded;
+    }
+  } catch {
+    // storage unavailable — empty stacks ready for Phase 4 reclaim
+  }
+  return store;
 }
 
 function ensureHydrated() {
@@ -354,26 +379,47 @@ function onMessage(message, sender, sendResponse) {
         break;
       }
       case MSG.SEARCH_QUERY: {
-        sendResponse({
-          ok: true,
-          stub: true,
+        const config = await loadConfig();
+        const result = await runSearchQuery({
           query: message.query ?? '',
-          open: [],
-          stacked: [],
-          note: 'Fuzzy + pinyin + recency-first lands in Phase 3.',
+          stackStore,
+          topicCache,
+          pinyinEnabled: config.searchPinyinEnabled !== false,
         });
+        sendResponse(result);
+        break;
+      }
+      case MSG.ACTIVATE_TAB: {
+        const tabId = Number(message.tabId);
+        if (!Number.isFinite(tabId)) {
+          sendResponse({ ok: false, error: 'missing tabId' });
+          break;
+        }
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          if (typeof tab.windowId === 'number') {
+            await chrome.windows.update(tab.windowId, { focused: true });
+          }
+          await chrome.tabs.update(tabId, { active: true });
+          sendResponse({ ok: true, tabId });
+        } catch (err) {
+          sendResponse({ ok: false, error: String(err?.message || err) });
+        }
         break;
       }
       case MSG.GET_STACKS: {
-        sendResponse({ ok: true, stacks: stackStore.list(), stub: true });
+        sendResponse({
+          ok: true,
+          stacks: stackStore.list(),
+          stub: stackStore.size === 0,
+        });
         break;
       }
       case MSG.RECALL_STACK: {
-        sendResponse({
-          ok: false,
-          stub: true,
-          error: 'RECALL_STACK not implemented yet (Phase 4).',
-        });
+        // Phase 4 implements full reclaim/recall; Phase 3 wires the stub for search Enter.
+        const stackId = String(message.stackId ?? '');
+        const result = await recallStack(stackId);
+        sendResponse(result);
         break;
       }
       case MSG.EXPORT_OR_DISCARD_STACKS: {

@@ -6,7 +6,7 @@
   "description": "MV3 Chrome extension: on-demand LLM tab grouping, dedupe, Stacks, and search.",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "typecheck": "for f in background/*.js shared/*.js content/*.js; do node --check \"$f\" || exit 1; done"
+    "typecheck": "for f in background/*.js shared/*.js content/*.js vendor/*.js; do node --check \"$f\" || exit 1; done"
   },
   "engines": {
     "node": ">=20"

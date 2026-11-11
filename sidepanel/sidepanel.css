@@ -179,6 +179,66 @@ select:disabled {
   border-bottom: 1px solid var(--line);
 }
 
+.sp-search-section {
+  margin-top: 0.75rem;
+}
+
+.sp-search-heading {
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sp-search-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sp-search-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  padding: 0.45rem 0.5rem;
+  margin: 0 0 0.2rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.sp-search-item:hover,
+.sp-search-item.is-active {
+  background: var(--bg-accent);
+  border-color: var(--line);
+}
+
+.sp-search-item.is-active {
+  outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: 0;
+}
+
+.sp-search-title {
+  display: block;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.sp-search-meta {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sp-link {
   color: var(--brand);
   font-weight: 600;
