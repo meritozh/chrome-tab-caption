@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tab Caption</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="sp-header">
+      <div class="sp-brand">
+        <span class="sp-mark" aria-hidden="true"></span>
+        <h1>Tab Caption</h1>
+      </div>
+      <nav class="sp-nav" aria-label="Panel views">
+        <button type="button" id="btn-view-main" class="sp-nav-btn is-active" data-view="main">
+          Organize
+        </button>
+        <button type="button" id="btn-view-settings" class="sp-nav-btn" data-view="settings">
+          Settings
+        </button>
+      </nav>
+    </header>
+
+    <main id="view-main" class="sp-view is-active">
+      <section class="sp-section" aria-labelledby="organize-heading">
+        <h2 id="organize-heading">Organize</h2>
+        <p class="sp-help">
+          On-demand topic grouping. LLM runs only when you confirm — never always-on.
+        </p>
+        <div class="sp-row">
+          <label class="sp-label" for="group-scope">Scope</label>
+          <select id="group-scope" disabled title="Wired in Phase 2">
+            <option value="all">All windows</option>
+            <option value="current">Current window</option>
+          </select>
+        </div>
+        <button type="button" id="btn-organize" class="sp-cta" disabled title="Phase 2 stub">
+          Organize tabs
+        </button>
+        <p id="organize-status" class="sp-status" role="status">Organize is stubbed (Phase 2).</p>
+      </section>
+
+      <section class="sp-section" aria-labelledby="search-heading">
+        <h2 id="search-heading">Search</h2>
+        <label class="sp-sr" for="search-input">Search open tabs and stacks</label>
+        <input
+          id="search-input"
+          type="search"
+          placeholder="Search tabs &amp; stacks (fuzzy + pinyin later)"
+          autocomplete="off"
+        />
+        <div id="search-results" class="sp-results" aria-live="polite">
+          <p class="sp-muted">Open / Stacked results appear here (Phase 3).</p>
+        </div>
+      </section>
+
+      <section class="sp-section" aria-labelledby="stacks-heading">
+        <h2 id="stacks-heading">Stacks</h2>
+        <p class="sp-help">
+          Reclaimed tabs from this extension (not browser recently-closed).
+        </p>
+        <ul id="stacks-list" class="sp-list">
+          <li class="sp-muted">No stacked tabs yet (reclaim lands in Phase 4).</li>
+        </ul>
+      </section>
+
+      <section class="sp-section" aria-labelledby="preview-heading">
+        <h2 id="preview-heading">Privacy preview</h2>
+        <p class="sp-help">
+          Fields that would be sent to your LLM endpoint are always listed before a real call.
+        </p>
+        <button type="button" id="btn-preview" class="sp-secondary">Preview classify fields</button>
+        <pre id="preview-out" class="sp-pre" hidden></pre>
+      </section>
+    </main>
+
+    <main id="view-settings" class="sp-view" hidden>
+      <section class="sp-section" aria-labelledby="settings-heading">
+        <h2 id="settings-heading">Settings</h2>
+        <p class="sp-help">
+          LLM endpoints, thresholds, and privacy live on the Options page.
+        </p>
+        <a id="link-options" class="sp-link" href="../options/options.html" target="_blank" rel="noopener">
+          Open Options
+        </a>
+        <p class="sp-muted">In-shell settings mirror can grow here later; Options remains the source of truth for keys.</p>
+      </section>
+    </main>
+
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

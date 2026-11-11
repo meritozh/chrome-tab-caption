@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tab Caption — Options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <header class="opt-header">
+      <p class="opt-eyebrow">chrome-tab-caption</p>
+      <h1>Options</h1>
+      <p class="opt-lede">
+        Configure your LLM endpoint and thresholds. API keys stay in
+        <code>chrome.storage.local</code> only — never sync, never committed.
+      </p>
+    </header>
+
+    <form id="options-form" class="opt-form">
+      <fieldset>
+        <legend>LLM endpoint</legend>
+        <label>
+          Provider
+          <select id="llmProvider" name="llmProvider" required>
+            <option value="">Select…</option>
+            <option value="anthropic">Anthropic Messages</option>
+            <option value="openai-responses">OpenAI Responses-style</option>
+          </select>
+        </label>
+        <label>
+          Endpoint base URL
+          <input
+            id="endpointBaseUrl"
+            name="endpointBaseUrl"
+            type="url"
+            placeholder="https://api.anthropic.com"
+            autocomplete="off"
+          />
+        </label>
+        <label>
+          API key
+          <input
+            id="apiKey"
+            name="apiKey"
+            type="password"
+            placeholder="Leave blank to keep existing · stored locally only"
+            autocomplete="off"
+          />
+        </label>
+        <label>
+          Model
+          <input id="model" name="model" type="text" placeholder="e.g. claude-… or gpt-…" autocomplete="off" />
+        </label>
+        <div class="opt-actions">
+          <button type="button" id="btn-test-llm" class="opt-secondary">Test connection (mock)</button>
+          <span id="test-status" class="opt-status" role="status"></span>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Thresholds</legend>
+        <label>
+          maxOpenTabs
+          <input id="maxOpenTabs" name="maxOpenTabs" type="number" min="1" step="1" />
+        </label>
+        <label>
+          cacheSize
+          <input id="cacheSize" name="cacheSize" type="number" min="1" step="1" />
+        </label>
+        <label>
+          stackSize
+          <input id="stackSize" name="stackSize" type="number" min="1" step="1" />
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Privacy</legend>
+        <label class="opt-check">
+          <input id="privacyShowFieldsPreview" name="privacyShowFieldsPreview" type="checkbox" checked disabled />
+          Always show LLM payload fields + preview before real calls
+        </label>
+        <p class="opt-help">
+          Locked on by Accepted ADR (#12). Fields UI below mirrors what Side Panel will preview.
+        </p>
+        <div class="opt-preview-fields" aria-label="Fields sent to LLM">
+          <h2>Fields preview (always visible)</h2>
+          <ul>
+            <li><code>url</code> — normalized page URL</li>
+            <li><code>title</code> — document title</li>
+            <li><code>snippet</code> — optional meta/snippet</li>
+            <li><code>extractedText</code> — short on-demand excerpt (≤~280 chars)</li>
+            <li><code>provider</code> / <code>model</code> / <code>endpointBaseUrl</code></li>
+          </ul>
+          <p class="opt-help">API key is never included in the preview payload listing.</p>
+        </div>
+      </fieldset>
+
+      <div class="opt-actions">
+        <button type="submit" class="opt-primary">Save</button>
+        <span id="save-status" class="opt-status" role="status"></span>
+      </div>
+    </form>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
