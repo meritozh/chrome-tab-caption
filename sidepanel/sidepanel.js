@@ -412,20 +412,35 @@ function setSearchStatus(text, { hidden = !text } = {}) {
 }
 
 /**
- * @param {{ open?: object[], stacked?: object[] } | null} res
+ * @param {{ ok?: boolean, open?: object[], stacked?: object[], error?: string } | null} res
  * @param {string} query
+ * @param {{ transportError?: string } | null} [fail]
  */
-function renderSearchResults(res, query) {
+function renderSearchResults(res, query, fail = null) {
   if (!searchResults) return;
+
+  if (!query) {
+    flatSearchHits = [];
+    activeSearchIndex = -1;
+    searchResults.innerHTML = '<p class="sp-muted">Type to search Open tabs and Stacked records.</p>';
+    return;
+  }
+
+  const transportError = fail?.transportError;
+  const workerError = res && res.ok === false ? res.error || 'Search failed' : null;
+  if (transportError || workerError) {
+    flatSearchHits = [];
+    activeSearchIndex = -1;
+    const msg = transportError || workerError;
+    searchResults.innerHTML = `<p class="sp-muted">Search error: ${escapeHtml(String(msg))}</p>`;
+    setSearchStatus(String(msg));
+    return;
+  }
+
   const open = Array.isArray(res?.open) ? res.open : [];
   const stacked = Array.isArray(res?.stacked) ? res.stacked : [];
   flatSearchHits = [...open, ...stacked];
   activeSearchIndex = flatSearchHits.length ? 0 : -1;
-
-  if (!query) {
-    searchResults.innerHTML = '<p class="sp-muted">Type to search Open tabs and Stacked records.</p>';
-    return;
-  }
 
   if (!flatSearchHits.length) {
     searchResults.innerHTML = `<p class="sp-muted">No matches for “${escapeHtml(query)}”.</p>`;
@@ -538,9 +553,13 @@ searchInput?.addEventListener('input', () => {
       renderSearchResults(null, '');
       return;
     }
-    const res = await sendToBackground(MSG.SEARCH_QUERY, { query }).catch(() => null);
+    let transportError = '';
+    const res = await sendToBackground(MSG.SEARCH_QUERY, { query }).catch((err) => {
+      transportError = String(err?.message || err || 'Search request failed');
+      return null;
+    });
     if (reqId !== searchRequestId) return;
-    renderSearchResults(res, query);
+    renderSearchResults(res, query, transportError ? { transportError } : null);
   }, 160);
 });
 
