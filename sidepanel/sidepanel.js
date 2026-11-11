@@ -164,21 +164,20 @@ confirmBtn?.addEventListener('click', async () => {
   organizeStatus.textContent = 'Organizing…';
 
   // FIRST await must be permissions.request to preserve the click user gesture.
-  // Do not await GET_CONFIG / contains here — config was cached at preview time.
-  if (pending.hasApiKey && pending.llmProvider) {
-    const allowed = await requestOrganizePermissions({
-      endpointBaseUrl: pending.endpointBaseUrl,
-      provider: pending.llmProvider,
-      includeExtractHosts: true,
-    });
-    if (!allowed) {
-      setBusy(false);
-      // Keep preview open so the user can retry Confirm after granting.
-      if (scopeSelect) scopeSelect.disabled = true;
-      organizeStatus.textContent =
-        'Host permission denied. Grant LLM + page access, then Confirm again.';
-      return;
-    }
+  // Always request (not gated on stale hasApiKey): covers key/provider saved after preview.
+  // Includes both public provider defaults + preview endpoint + extract hosts.
+  const allowed = await requestOrganizePermissions({
+    endpointBaseUrl: pending.endpointBaseUrl,
+    provider: pending.llmProvider,
+    includeExtractHosts: true,
+    includeAllProviderDefaults: true,
+  });
+  if (!allowed) {
+    setBusy(false);
+    if (scopeSelect) scopeSelect.disabled = true;
+    organizeStatus.textContent =
+      'Host permission denied. Grant LLM + page access, then Confirm again.';
+    return;
   }
 
   const res = await sendToBackground(MSG.GROUP_TABS, {
@@ -187,11 +186,15 @@ confirmBtn?.addEventListener('click', async () => {
     confirmed: true,
   }).catch((err) => ({ ok: false, error: String(err) }));
   setBusy(false);
-  hidePreview();
   if (!res?.ok) {
-    organizeStatus.textContent = res?.error || 'Organize failed';
+    // Keep preview open so Confirm retains a user-gesture path (e.g. needsPermission).
+    if (scopeSelect) scopeSelect.disabled = true;
+    organizeStatus.textContent = res?.needsPermission
+      ? `${res.error || 'Host permission missing.'} Confirm again after granting access.`
+      : res?.error || 'Organize failed';
     return;
   }
+  hidePreview();
   const topics = res.logical?.length ?? 0;
   const applied = res.physical?.applied ?? 0;
   organizeStatus.textContent = `Done — ${topics} logical topics, ${applied} physical groups, ${res.classified ?? 0} classified.`;
@@ -199,6 +202,12 @@ confirmBtn?.addEventListener('click', async () => {
 });
 
 onBackgroundBroadcast((message) => {
+  if (message.type === MSG.CONFIG_UPDATED && pendingPreview) {
+    hidePreview();
+    organizeStatus.textContent =
+      'Settings changed — run Organize again to refresh the privacy preview.';
+    return;
+  }
   if (message.type !== MSG.GROUP_PROGRESS) return;
   if (typeof message.message === 'string') {
     organizeStatus.textContent = message.message;

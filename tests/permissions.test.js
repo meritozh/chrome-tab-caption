@@ -35,13 +35,16 @@ describe('optional host permissions', () => {
     assert.equal(resolveEndpointBaseUrl('', ''), '');
   });
 
-  it('buildOrganizePermissionOrigins includes default host + extract patterns', () => {
+  it('buildOrganizePermissionOrigins includes both provider defaults + extract', () => {
     const origins = buildOrganizePermissionOrigins({
-      endpointBaseUrl: '',
+      endpointBaseUrl: 'https://gateway.example',
       provider: 'anthropic',
       includeExtractHosts: true,
+      includeAllProviderDefaults: true,
     });
+    assert.ok(origins.includes('https://gateway.example/*'));
     assert.ok(origins.includes('https://api.anthropic.com/*'));
+    assert.ok(origins.includes('https://api.openai.com/*'));
     for (const p of EXTRACT_HOST_PATTERNS) assert.ok(origins.includes(p));
   });
 

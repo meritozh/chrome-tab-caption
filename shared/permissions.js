@@ -45,18 +45,35 @@ export function originPatternFromEndpoint(endpointBaseUrl) {
 
 /**
  * Build origin list for Organize confirm (LLM endpoint + extract hosts).
- * @param {{ endpointBaseUrl?: string, provider?: string, includeExtractHosts?: boolean }} opts
+ * When `includeAllProviderDefaults` is true, also grant both Anthropic and OpenAI
+ * public hosts so a stale preview (config changed after preview) still matches live fetch.
+ * @param {{
+ *   endpointBaseUrl?: string,
+ *   provider?: string,
+ *   includeExtractHosts?: boolean,
+ *   includeAllProviderDefaults?: boolean,
+ * }} opts
  * @returns {string[]}
  */
 export function buildOrganizePermissionOrigins(opts = {}) {
+  /** @type {string[]} */
   const origins = [];
-  const endpoint = resolveEndpointBaseUrl(opts.endpointBaseUrl, opts.provider);
-  const pattern = originPatternFromEndpoint(endpoint);
-  if (pattern) origins.push(pattern);
-  if (opts.includeExtractHosts !== false) {
-    for (const p of EXTRACT_HOST_PATTERNS) {
-      if (!origins.includes(p)) origins.push(p);
+  const add = (pattern) => {
+    if (pattern && !origins.includes(pattern)) origins.push(pattern);
+  };
+
+  add(originPatternFromEndpoint(resolveEndpointBaseUrl(opts.endpointBaseUrl, opts.provider)));
+  // Explicit custom base even when provider is missing / changed after preview.
+  add(originPatternFromEndpoint(opts.endpointBaseUrl || ''));
+
+  if (opts.includeAllProviderDefaults !== false) {
+    for (const base of Object.values(DEFAULT_ENDPOINT_BY_PROVIDER)) {
+      add(originPatternFromEndpoint(base));
     }
+  }
+
+  if (opts.includeExtractHosts !== false) {
+    for (const p of EXTRACT_HOST_PATTERNS) add(p);
   }
   return origins;
 }
