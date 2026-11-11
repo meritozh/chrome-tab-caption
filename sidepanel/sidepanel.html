@@ -85,10 +85,20 @@
       <section class="sp-section" aria-labelledby="stacks-heading">
         <h2 id="stacks-heading">Stacks</h2>
         <p class="sp-help">
-          Reclaimed tabs from this extension (not browser recently-closed).
+          Reclaimed tabs from this extension (not browser recently-closed). Search Stacked
+          results call the same recall path.
         </p>
+        <div id="stacks-overflow" class="sp-overflow" hidden>
+          <h3 class="sp-subhead">Stack archive full</h3>
+          <p id="stacks-overflow-summary" class="sp-help"></p>
+          <div class="sp-row sp-actions">
+            <button type="button" id="btn-stacks-export" class="sp-cta">Export oldest &amp; free space</button>
+            <button type="button" id="btn-stacks-discard" class="sp-secondary">Discard oldest</button>
+          </div>
+        </div>
+        <p id="stacks-status" class="sp-status" role="status" hidden></p>
         <ul id="stacks-list" class="sp-list">
-          <li class="sp-muted">No stacked tabs yet (reclaim lands in Phase 4).</li>
+          <li class="sp-muted">No stacked tabs yet — reclaim runs when open tabs exceed maxOpenTabs.</li>
         </ul>
       </section>
 

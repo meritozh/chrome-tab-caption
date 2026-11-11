@@ -20,6 +20,7 @@ export const SESSION_KEYS = Object.freeze({
   RUNTIME: 'runtime',
   CLOSING_TAB_IDS: 'closingTabIds',
   LAST_ORGANIZE: 'lastOrganize',
+  STACKS_OVERFLOW_PENDING: 'stacksOverflowPending',
 });
 
 /**

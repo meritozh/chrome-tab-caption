@@ -307,3 +307,32 @@ select:disabled {
   flex-wrap: wrap;
   margin-top: 0.5rem;
 }
+
+.sp-overflow {
+  margin: 0.5rem 0 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 8%, #fff);
+}
+
+.sp-overflow .sp-subhead {
+  color: var(--warn);
+}
+
+.sp-stack-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.sp-stack-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.sp-stack-actions .sp-secondary {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
