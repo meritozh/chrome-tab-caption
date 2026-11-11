@@ -3,6 +3,7 @@
  */
 
 import { DEFAULT_CONFIG, MSG } from '../shared/constants.js';
+import { API_KEY_REDACTED, isApiKeyUnchanged } from '../shared/config.js';
 import { sendToBackground } from '../shared/messages.js';
 
 const fields = [
@@ -22,7 +23,11 @@ function fillForm(config) {
   for (const name of fields) {
     const el = document.getElementById(name);
     if (!el) continue;
-    const value = config[name] ?? DEFAULT_CONFIG[name] ?? '';
+    let value = config[name] ?? DEFAULT_CONFIG[name] ?? '';
+    // Never put the redacted sentinel into the password field (would wipe on Save).
+    if (name === 'apiKey' && isApiKeyUnchanged(value)) {
+      value = '';
+    }
     if (el.type === 'checkbox') {
       el.checked = Boolean(value);
     } else {
@@ -44,6 +49,12 @@ function readForm() {
       document.getElementById(name)
     );
     if (!el) continue;
+    if (name === 'apiKey') {
+      // Omit empty / redacted so SET_CONFIG preserves the stored secret.
+      if (isApiKeyUnchanged(el.value)) continue;
+      patch.apiKey = el.value;
+      continue;
+    }
     if (el.type === 'number') {
       const n = Number(el.value);
       patch[name] = Number.isFinite(n) ? n : DEFAULT_CONFIG[name];
@@ -79,5 +90,8 @@ document.getElementById('btn-test-llm')?.addEventListener('click', async () => {
     ? `Mock OK — topic “${res.result?.topic ?? '?'}” (${res.note || 'stub'})`
     : `Failed: ${res?.error || 'unknown'}`;
 });
+
+// Exported for tests (browser ignores unused bindings on module side effects)
+export { fillForm, readForm, API_KEY_REDACTED };
 
 load();
