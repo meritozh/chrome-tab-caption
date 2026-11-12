@@ -132,7 +132,16 @@ function adoptAlarmResumeState(state) {
     Number(state?.remaining) > 0 &&
     jobId &&
     !suppressedJobIds.has(jobId);
-  if (!isAlarmResume || organizePhase !== 'idle') return false;
+  // Never hijack preview / Confirm / busy Organize (phase alone is not enough —
+  // Organize sets phase idle while setBusy(true) during preview fetch).
+  if (
+    !isAlarmResume ||
+    organizePhase !== 'idle' ||
+    organizeBusy ||
+    pendingPreview
+  ) {
+    return false;
+  }
 
   adoptedAlarmResume = true;
   organizePhase = 'running';
@@ -267,6 +276,14 @@ cancelBtn?.addEventListener('click', async () => {
   organizeRunId += 1;
 
   if (isPreviewOnlyCancel(phase)) {
+    // If a stale alarm-adopt raced under the preview, still cancel the SW job.
+    if (adoptedAlarmResume && activeJobId) {
+      suppressJob(activeJobId);
+      sendToBackground(MSG.CANCEL_GROUP, {
+        jobId: activeJobId,
+        cancelActive: true,
+      }).catch(() => {});
+    }
     hidePreview();
     setOrganizeIdle();
     lastLlmCallsAttempted = 0;

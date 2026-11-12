@@ -103,6 +103,25 @@ let activeOrganizeJob = null;
  */
 const cancelledClientRunIds = new Set();
 
+/**
+ * Organize jobIds cancelled while INTERRUPTED / mid-alarm-resume startup.
+ * Checked synchronously so Cancel wins races against maybeResumeOrganizeFromCheckpoint.
+ * @type {Set<string>}
+ */
+const cancelledOrganizeJobIds = new Set();
+
+/**
+ * @param {string | null | undefined} jobId
+ */
+function markOrganizeJobCancelled(jobId) {
+  if (!jobId || typeof jobId !== 'string') return;
+  cancelledOrganizeJobIds.add(jobId);
+  if (cancelledOrganizeJobIds.size > 32) {
+    const first = cancelledOrganizeJobIds.values().next().value;
+    cancelledOrganizeJobIds.delete(first);
+  }
+}
+
 async function initPanelBehavior() {
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
@@ -273,15 +292,37 @@ async function maybeResumeOrganizeFromCheckpoint() {
   organizeResumeInFlight = true;
   const controller = new AbortController();
   const jobId = cp.jobId;
+  // Cancel may have won the race while we were hydrating — honor sync cancel marks.
+  if (cancelledOrganizeJobIds.has(jobId) || organizeCheckpoint == null) {
+    organizeResumeInFlight = false;
+    await clearOrganizeResumeAlarm();
+    await saveOrganizeCheckpoint(null);
+    organizeCheckpoint = null;
+    broadcastJobState();
+    return null;
+  }
   activeOrganizeJob = {
     jobId,
     controller,
     clientRunId: typeof cp.clientRunId === 'number' ? cp.clientRunId : null,
   };
+  if (cancelledOrganizeJobIds.has(jobId)) {
+    controller.abort();
+    activeOrganizeJob = null;
+    organizeResumeInFlight = false;
+    await clearOrganizeResumeAlarm();
+    await saveOrganizeCheckpoint(null);
+    organizeCheckpoint = null;
+    broadcastJobState();
+    return null;
+  }
   broadcastJobState();
   try {
     await bumpMetrics({ alarmResumes: 1 });
     localMetrics = await loadMetrics();
+    if (cancelledOrganizeJobIds.has(jobId) || controller.signal.aborted) {
+      return null;
+    }
     const config = await loadConfig();
     const result = await runOrganizeJob({
       scope: cp.scope,
@@ -605,49 +646,62 @@ function onMessage(message, sender, sendResponse) {
             cancelledClientRunIds.delete(first);
           }
         }
-        // Match by clientRunId, jobId (alarm resume), or bare cancel of the active job.
-        const match =
+
+        const cpMem = organizeCheckpoint;
+        const pendingJobId =
+          requestJobId ||
+          (cpMem && typeof cpMem.jobId === 'string' ? cpMem.jobId : null) ||
+          activeOrganizeJob?.jobId ||
+          null;
+
+        // Sync: mark cancelled + drop in-memory checkpoint BEFORE any await so an
+        // overlapping maybeResume cannot keep classifying after Cancel returns.
+        if (pendingJobId) markOrganizeJobCancelled(pendingJobId);
+        if (cpMem && (requestJobId == null || cpMem.jobId === requestJobId || message.cancelActive)) {
+          organizeCheckpoint = null;
+        }
+
+        const matchActive =
           activeOrganizeJob &&
           ((clientRunId == null && requestJobId == null) ||
             (clientRunId != null && activeOrganizeJob.clientRunId === clientRunId) ||
             (requestJobId != null && activeOrganizeJob.jobId === requestJobId) ||
-            message.cancelActive === true);
-        if (match && activeOrganizeJob) {
-          const { jobId, controller } = activeOrganizeJob;
-          controller.abort();
+            message.cancelActive === true ||
+            (pendingJobId != null && activeOrganizeJob.jobId === pendingJobId));
+
+        let hadActiveJob = false;
+        let cancelledJobId = pendingJobId;
+        if (matchActive && activeOrganizeJob) {
+          cancelledJobId = activeOrganizeJob.jobId;
+          markOrganizeJobCancelled(cancelledJobId);
+          activeOrganizeJob.controller.abort();
+          hadActiveJob = true;
+        }
+
+        const shouldClearPending =
+          hadActiveJob ||
+          message.cancelActive === true ||
+          (requestJobId != null && (!cpMem || cpMem.jobId === requestJobId));
+
+        if (hadActiveJob || shouldClearPending) {
           await clearOrganizeResumeAlarm();
           await saveOrganizeCheckpoint(null);
           organizeCheckpoint = null;
           broadcastJobState();
-          sendResponse({ ok: true, cancelled: true, jobId, hadActiveJob: true });
+          sendResponse({
+            ok: true,
+            cancelled: true,
+            jobId: cancelledJobId,
+            hadActiveJob,
+            clearedPending: true,
+          });
         } else {
-          // No in-flight job yet (INTERRUPTED waiting for alarm) — still drop the
-          // checkpoint so a later alarm cannot resume after the user cancelled.
-          const cp = organizeCheckpoint || (await loadOrganizeCheckpoint());
-          const pendingMatches =
-            cp &&
-            (requestJobId == null || cp.jobId === requestJobId) &&
-            (message.cancelActive === true || requestJobId != null);
-          if (pendingMatches) {
-            await clearOrganizeResumeAlarm();
-            await saveOrganizeCheckpoint(null);
-            organizeCheckpoint = null;
-            broadcastJobState();
-            sendResponse({
-              ok: true,
-              cancelled: true,
-              jobId: cp.jobId,
-              hadActiveJob: false,
-              clearedPending: true,
-            });
-          } else {
-            sendResponse({
-              ok: true,
-              cancelled: clientRunId != null || requestJobId != null,
-              hadActiveJob: false,
-              preemptive: clientRunId != null,
-            });
-          }
+          sendResponse({
+            ok: true,
+            cancelled: clientRunId != null || requestJobId != null,
+            hadActiveJob: false,
+            preemptive: clientRunId != null,
+          });
         }
         break;
       }
