@@ -648,37 +648,16 @@ function onMessage(message, sender, sendResponse) {
         }
 
         const cpMem = organizeCheckpoint;
-        const pendingJobId =
-          requestJobId ||
-          (cpMem && typeof cpMem.jobId === 'string' ? cpMem.jobId : null) ||
-          activeOrganizeJob?.jobId ||
-          null;
 
-        // Sync: mark cancelled + drop in-memory checkpoint BEFORE any await so an
-        // overlapping maybeResume cannot keep classifying after Cancel returns.
-        if (pendingJobId) markOrganizeJobCancelled(pendingJobId);
-        let droppedMemCheckpoint = false;
-        // Any Cancel intent (cancelActive, jobId, or clientRunId) drops the pending
-        // checkpoint in memory — session storage must be cleared too (SW restart).
-        if (
-          cpMem &&
-          (message.cancelActive === true || requestJobId != null || clientRunId != null)
-        ) {
-          markOrganizeJobCancelled(cpMem.jobId);
-          organizeCheckpoint = null;
-          droppedMemCheckpoint = true;
-        }
-
+        // Abort only jobs this Cancel explicitly identifies — never bare cancelActive
+        // against another window's in-flight Organize.
         const matchActive =
           activeOrganizeJob &&
-          ((clientRunId == null && requestJobId == null) ||
-            (clientRunId != null && activeOrganizeJob.clientRunId === clientRunId) ||
-            (requestJobId != null && activeOrganizeJob.jobId === requestJobId) ||
-            message.cancelActive === true ||
-            (pendingJobId != null && activeOrganizeJob.jobId === pendingJobId));
+          ((clientRunId != null && activeOrganizeJob.clientRunId === clientRunId) ||
+            (requestJobId != null && activeOrganizeJob.jobId === requestJobId));
 
         let hadActiveJob = false;
-        let cancelledJobId = pendingJobId;
+        let cancelledJobId = requestJobId;
         if (matchActive && activeOrganizeJob) {
           cancelledJobId = activeOrganizeJob.jobId;
           markOrganizeJobCancelled(cancelledJobId);
@@ -686,13 +665,31 @@ function onMessage(message, sender, sendResponse) {
           hadActiveJob = true;
         }
 
-        const shouldClearPending =
-          hadActiveJob ||
-          droppedMemCheckpoint ||
-          message.cancelActive === true ||
-          (requestJobId != null && (!cpMem || cpMem.jobId === requestJobId));
+        // Drop pending checkpoint only when it belongs to this Cancel (jobId /
+        // clientRunId match), or when cancelActive clears a pending job with no
+        // unrelated active Organize running.
+        let droppedMemCheckpoint = false;
+        const cpMatchesRequest =
+          cpMem &&
+          ((requestJobId != null && cpMem.jobId === requestJobId) ||
+            (clientRunId != null && cpMem.clientRunId === clientRunId));
+        const cancelActiveClearsIdlePending =
+          message.cancelActive === true &&
+          cpMem &&
+          !activeOrganizeJob &&
+          (requestJobId == null || cpMem.jobId === requestJobId);
 
-        if (hadActiveJob || shouldClearPending) {
+        if (cpMatchesRequest || cancelActiveClearsIdlePending || (hadActiveJob && cpMem)) {
+          markOrganizeJobCancelled(cpMem.jobId);
+          organizeCheckpoint = null;
+          droppedMemCheckpoint = true;
+        } else if (requestJobId) {
+          markOrganizeJobCancelled(requestJobId);
+        }
+
+        const shouldClearPending = hadActiveJob || droppedMemCheckpoint;
+
+        if (shouldClearPending) {
           await clearOrganizeResumeAlarm();
           await saveOrganizeCheckpoint(null);
           organizeCheckpoint = null;
@@ -700,9 +697,9 @@ function onMessage(message, sender, sendResponse) {
           sendResponse({
             ok: true,
             cancelled: true,
-            jobId: cancelledJobId,
+            jobId: cancelledJobId || cpMem?.jobId || null,
             hadActiveJob,
-            clearedPending: true,
+            clearedPending: droppedMemCheckpoint,
           });
         } else {
           sendResponse({

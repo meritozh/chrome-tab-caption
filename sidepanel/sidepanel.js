@@ -77,6 +77,13 @@ let organizePhase = 'idle';
 let activeJobId = null;
 /** Side Panel adopted this job via alarm resume (not a local Confirm). */
 let adoptedAlarmResume = false;
+/**
+ * Alarm-resume jobId seen via GET_JOB_STATE / JOB_STATE even when UI adopt was
+ * blocked (busy/preview). Used so Cancel can target that job without aborting
+ * unrelated Organize runs in other windows.
+ * @type {string | null}
+ */
+let knownAlarmJobId = null;
 /** Job ids the user cancelled — do not re-adopt from JOB_STATE / progress. */
 /** @type {Set<string>} */
 const suppressedJobIds = new Set();
@@ -125,7 +132,29 @@ function suppressJob(jobId) {
  * @param {Record<string, unknown>} state
  * @returns {boolean}
  */
+/**
+ * Remember alarm-resume job ids even when UI adopt is deferred.
+ * @param {Record<string, unknown>} state
+ */
+function noteAlarmJob(state) {
+  const jobId = typeof state?.jobId === 'string' ? state.jobId : null;
+  if (
+    state?.alarmResume === true &&
+    jobId &&
+    Number(state?.remaining) > 0 &&
+    !suppressedJobIds.has(jobId)
+  ) {
+    knownAlarmJobId = jobId;
+  }
+  if (state?.alarmResume !== true && !state?.active && !state?.resumable) {
+    if (knownAlarmJobId && (state?.jobId == null || state.jobId === knownAlarmJobId)) {
+      knownAlarmJobId = null;
+    }
+  }
+}
+
 function adoptAlarmResumeState(state) {
+  noteAlarmJob(state);
   const jobId = typeof state?.jobId === 'string' ? state.jobId : null;
   const isAlarmResume =
     state?.alarmResume === true &&
@@ -276,13 +305,13 @@ cancelBtn?.addEventListener('click', async () => {
   organizeRunId += 1;
 
   if (isPreviewOnlyCancel(phase)) {
-    // Always clear background alarm-resume / pending checkpoint — adopt may have
-    // been blocked while busy/preview, so don't gate on adoptedAlarmResume.
-    if (activeJobId) suppressJob(activeJobId);
-    sendToBackground(MSG.CANCEL_GROUP, {
-      jobId: activeJobId || undefined,
-      cancelActive: true,
-    }).catch(() => {});
+    // Only cancel a job this panel knows about — never bare cancelActive (other windows).
+    const jobToCancel = activeJobId || knownAlarmJobId;
+    if (jobToCancel) {
+      suppressJob(jobToCancel);
+      sendToBackground(MSG.CANCEL_GROUP, { jobId: jobToCancel }).catch(() => {});
+      knownAlarmJobId = null;
+    }
     hidePreview();
     setOrganizeIdle();
     lastLlmCallsAttempted = 0;
@@ -292,33 +321,30 @@ cancelBtn?.addEventListener('click', async () => {
   }
 
   if (phase === 'confirming') {
-    // Permission step — cancel client run AND any pending/alarm resume checkpoint.
+    // Permission step — preemptive clientRunId cancel only (no cross-window abort).
     hidePreview();
     setOrganizeIdle();
     lastLlmCallsAttempted = 0;
     lastClassified = 0;
     organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
-    sendToBackground(MSG.CANCEL_GROUP, {
-      clientRunId: cancelledRunId,
-      cancelActive: true,
-    }).catch(() => {});
+    sendToBackground(MSG.CANCEL_GROUP, { clientRunId: cancelledRunId }).catch(() => {});
     return;
   }
 
   if (phase === 'running' || phase === 'cancelling') {
     organizePhase = 'cancelling';
     organizeStatus.textContent = 'Cancelling…';
-    const jobIdToCancel = activeJobId;
+    const jobIdToCancel = activeJobId || knownAlarmJobId;
     hidePreview();
     const cancelRes = await sendToBackground(MSG.CANCEL_GROUP, {
       clientRunId: cancelledRunId,
       jobId: jobIdToCancel || undefined,
-      cancelActive: true,
     }).catch(() => ({ ok: false }));
     // Suppress only when SW confirmed cancel / cleared pending — otherwise a
     // not-yet-started INTERRUPTED job could stay suppressed while still queued.
     if (cancelRes?.cancelled || cancelRes?.hadActiveJob || cancelRes?.clearedPending) {
       suppressJob(jobIdToCancel);
+      knownAlarmJobId = null;
     }
     // Confirm handler will refine copy from the cancelled job result when it returns;
     // show best-known progress counts immediately (never invent "no LLM" if we saw calls).
