@@ -94,6 +94,32 @@
       </fieldset>
 
       <fieldset>
+        <legend>Content &amp; cost</legend>
+        <label class="opt-check">
+          <input id="contentExtractionEnabled" name="contentExtractionEnabled" type="checkbox" />
+          On-demand page excerpt (optional host permission when Organize confirms)
+        </label>
+        <label>
+          dailyLlmQuota
+          <input id="dailyLlmQuota" name="dailyLlmQuota" type="number" min="0" step="1" />
+        </label>
+        <p class="opt-help">
+          Optional UTC-day LLM call cap (0 = unlimited). Cache hits still apply when the quota is
+          exhausted. Extraction stays off the always-on content_scripts path.
+        </p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Local metrics</legend>
+        <p class="opt-help">
+          Counters stay in <code>chrome.storage.local</code> only — not analytics, not sent off-device.
+        </p>
+        <ul id="metrics-list" class="opt-preview-fields" aria-live="polite">
+          <li class="opt-help">Loading…</li>
+        </ul>
+      </fieldset>
+
+      <fieldset>
         <legend>Privacy</legend>
         <label class="opt-check">
           <input id="privacyShowFieldsPreview" name="privacyShowFieldsPreview" type="checkbox" checked disabled />

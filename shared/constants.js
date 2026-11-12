@@ -13,6 +13,8 @@ export const STORAGE_KEYS = Object.freeze({
   TOPIC_CACHE: 'topicCache',
   STACK_RECORDS: 'stackRecords',
   SEARCH_INDEX: 'searchIndex',
+  /** Local-only counters (ADR Phase 7) — never synced / never sent off-device. */
+  METRICS: 'metrics',
 });
 
 /** chrome.storage.session runtime keys (optional) */
@@ -21,6 +23,8 @@ export const SESSION_KEYS = Object.freeze({
   CLOSING_TAB_IDS: 'closingTabIds',
   LAST_ORGANIZE: 'lastOrganize',
   STACKS_OVERFLOW_PENDING: 'stacksOverflowPending',
+  /** Persisted Organize checkpoint for alarm resume (ADR Phase 7). */
+  ORGANIZE_CHECKPOINT: 'organizeCheckpoint',
 });
 
 /**
@@ -43,6 +47,8 @@ export const MSG = Object.freeze({
   GET_ACTIVITY_LOG: 'GET_ACTIVITY_LOG',
   GET_LOGICAL_TOPICS: 'GET_LOGICAL_TOPICS',
   CANCEL_GROUP: 'CANCEL_GROUP',
+  GET_JOB_STATE: 'GET_JOB_STATE',
+  GET_METRICS: 'GET_METRICS',
 
   // SW → UI
   GROUP_PROGRESS: 'GROUP_PROGRESS',
@@ -87,6 +93,11 @@ export const DEFAULT_CONFIG = Object.freeze({
   urlNormalizeStripHash: true,
   urlNormalizeStripTrackingParams: true,
   classifyDebounceMs: 500,
+  /**
+   * Optional daily LLM call cap (UTC day). 0 = unlimited.
+   * Soft cost guard — Organize still applies cache hits when quota is exhausted.
+   */
+  dailyLlmQuota: 0,
 });
 
 /** Hard cap for excerpts persisted / sent to LLM (ADR §5.2). */

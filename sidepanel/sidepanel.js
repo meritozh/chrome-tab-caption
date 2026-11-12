@@ -59,21 +59,41 @@ const scopeSelect = /** @type {HTMLSelectElement | null} */ (document.getElement
  * @property {string} endpointBaseUrl
  * @property {string} llmProvider
  * @property {boolean} hasApiKey
+ * @property {boolean} contentExtractionEnabled
  */
 
 /** @type {PendingOrganize | null} */
 let pendingPreview = null;
 let organizeBusy = false;
 
+/** @returns {number} unique across side-panel windows */
+function nextOrganizeRunId() {
+  return Date.now() * 1000 + Math.floor(Math.random() * 1000);
+}
+
 /**
  * Generation token — Cancel bumps this so in-flight Confirm / progress cannot update UI.
+ * Must be unique across side-panel instances (windows) so CANCEL_GROUP preemptive
+ * marks do not collide. Never a simple 0-based counter alone.
  * @type {number}
  */
-let organizeRunId = 0;
+let organizeRunId = nextOrganizeRunId();
 /** @type {'idle' | 'preview' | 'confirming' | 'running' | 'cancelling'} */
 let organizePhase = 'idle';
 /** @type {string | null} */
 let activeJobId = null;
+/** Side Panel adopted this job via alarm resume (not a local Confirm). */
+let adoptedAlarmResume = false;
+/**
+ * Alarm-resume jobId seen via GET_JOB_STATE / JOB_STATE even when UI adopt was
+ * blocked (busy/preview). Used so Cancel can target that job without aborting
+ * unrelated Organize runs in other windows.
+ * @type {string | null}
+ */
+let knownAlarmJobId = null;
+/** Job ids the user cancelled — do not re-adopt from JOB_STATE / progress. */
+/** @type {Set<string>} */
+const suppressedJobIds = new Set();
 /** Last known LLM calls started for this run (from progress / job result). */
 let lastLlmCallsAttempted = 0;
 let lastClassified = 0;
@@ -97,7 +117,109 @@ function hidePreview() {
 function setOrganizeIdle() {
   organizePhase = 'idle';
   activeJobId = null;
+  adoptedAlarmResume = false;
   setBusy(false);
+}
+
+/**
+ * Remember a cancelled job so alarm JOB_STATE cannot revive it.
+ * @param {string | null | undefined} jobId
+ */
+function suppressJob(jobId) {
+  if (!jobId || typeof jobId !== 'string') return;
+  suppressedJobIds.add(jobId);
+  if (suppressedJobIds.size > 32) {
+    const first = suppressedJobIds.values().next().value;
+    suppressedJobIds.delete(first);
+  }
+}
+
+/**
+ * Adopt an alarm-resumed Organize into the Side Panel UI (idle only).
+ * @param {Record<string, unknown>} state
+ * @returns {boolean}
+ */
+/**
+ * Remember alarm-resume job ids even when UI adopt is deferred.
+ * @param {Record<string, unknown>} state
+ */
+function noteAlarmJob(state) {
+  const jobId = typeof state?.jobId === 'string' ? state.jobId : null;
+  if (
+    state?.alarmResume === true &&
+    jobId &&
+    Number(state?.remaining) > 0 &&
+    !suppressedJobIds.has(jobId)
+  ) {
+    knownAlarmJobId = jobId;
+  }
+  if (state?.alarmResume !== true && !state?.active && !state?.resumable) {
+    if (knownAlarmJobId && (state?.jobId == null || state.jobId === knownAlarmJobId)) {
+      knownAlarmJobId = null;
+    }
+  }
+}
+
+function adoptAlarmResumeState(state) {
+  noteAlarmJob(state);
+  const jobId = typeof state?.jobId === 'string' ? state.jobId : null;
+  const isAlarmResume =
+    state?.alarmResume === true &&
+    Number(state?.remaining) > 0 &&
+    jobId &&
+    !suppressedJobIds.has(jobId);
+  // Never hijack preview / Confirm / busy Organize (phase alone is not enough —
+  // Organize sets phase idle while setBusy(true) during preview fetch).
+  if (
+    !isAlarmResume ||
+    organizePhase !== 'idle' ||
+    organizeBusy ||
+    pendingPreview
+  ) {
+    return false;
+  }
+
+  adoptedAlarmResume = true;
+  organizePhase = 'running';
+  activeJobId = jobId;
+  if (typeof state.clientRunId === 'number') {
+    organizeRunId = state.clientRunId;
+  }
+  lastLlmCallsAttempted = Number(state.llmCallsAttempted) || lastLlmCallsAttempted;
+  lastClassified = Number(state.classified) || lastClassified;
+  setBusy(true);
+  if (previewPanel) {
+    previewPanel.hidden = false;
+    const summary = document.getElementById('organize-preview-summary');
+    if (summary) {
+      summary.textContent = `Resuming Organize — ${state.remaining} tabs left. Cancel still works.`;
+    }
+  }
+  organizeStatus.textContent = `Alarm resume — ${state.remaining} tabs queued…`;
+  return true;
+}
+
+/**
+ * End an adopted alarm-resume UI without inventing a success string.
+ * Keeps GROUP_PROGRESS copy when present; only replaces placeholder resume text.
+ */
+function endAdoptedAlarmResumeUi() {
+  const status = organizeStatus?.textContent || '';
+  if (
+    status.startsWith('Alarm resume') ||
+    status.startsWith('Resuming Organize') ||
+    status === 'Organizing…' ||
+    status === 'Cancelling…'
+  ) {
+    organizeStatus.textContent = 'Organize ended.';
+  }
+  hidePreview();
+  setOrganizeIdle();
+  sendToBackground(MSG.GET_LOGICAL_TOPICS)
+    .then((res) => {
+      if (Array.isArray(res?.logical)) renderLogicalTopics(res.logical);
+    })
+    .catch(() => {});
 }
 
 /**
@@ -125,6 +247,7 @@ function renderOrganizePreview(preview, meta) {
     endpointBaseUrl: meta.endpointBaseUrl || '',
     llmProvider: meta.llmProvider || '',
     hasApiKey: Boolean(meta.hasApiKey),
+    contentExtractionEnabled: meta.contentExtractionEnabled !== false,
   };
   organizePhase = 'preview';
   if (!previewPanel) return;
@@ -177,6 +300,7 @@ organizeBtn?.addEventListener('click', async () => {
     endpointBaseUrl: cfg?.config?.endpointBaseUrl || '',
     llmProvider: cfg?.config?.llmProvider || '',
     hasApiKey: Boolean(cfg?.config?.hasApiKey),
+    contentExtractionEnabled: cfg?.config?.contentExtractionEnabled !== false,
   });
   organizeStatus.textContent = 'Review fields, then confirm to classify cache misses.';
 });
@@ -185,9 +309,16 @@ cancelBtn?.addEventListener('click', async () => {
   const phase = organizePhase;
   const cancelledRunId = organizeRunId;
   // Invalidate any in-flight Confirm handler (permission await or GROUP_TABS).
-  organizeRunId += 1;
+  organizeRunId = nextOrganizeRunId();
 
   if (isPreviewOnlyCancel(phase)) {
+    // Only cancel a job this panel knows about — never bare cancelActive (other windows).
+    const jobToCancel = activeJobId || knownAlarmJobId;
+    if (jobToCancel) {
+      suppressJob(jobToCancel);
+      sendToBackground(MSG.CANCEL_GROUP, { jobId: jobToCancel }).catch(() => {});
+      knownAlarmJobId = null;
+    }
     hidePreview();
     setOrganizeIdle();
     lastLlmCallsAttempted = 0;
@@ -197,7 +328,7 @@ cancelBtn?.addEventListener('click', async () => {
   }
 
   if (phase === 'confirming') {
-    // Permission step — no LLM yet; mark this run cancelled in SW in case GROUP_TABS races.
+    // Permission step — preemptive clientRunId cancel only (no cross-window abort).
     hidePreview();
     setOrganizeIdle();
     lastLlmCallsAttempted = 0;
@@ -210,8 +341,18 @@ cancelBtn?.addEventListener('click', async () => {
   if (phase === 'running' || phase === 'cancelling') {
     organizePhase = 'cancelling';
     organizeStatus.textContent = 'Cancelling…';
+    const jobIdToCancel = activeJobId || knownAlarmJobId;
     hidePreview();
-    await sendToBackground(MSG.CANCEL_GROUP, { clientRunId: cancelledRunId }).catch(() => {});
+    const cancelRes = await sendToBackground(MSG.CANCEL_GROUP, {
+      clientRunId: cancelledRunId,
+      jobId: jobIdToCancel || undefined,
+    }).catch(() => ({ ok: false }));
+    // Suppress only when SW confirmed cancel / cleared pending — otherwise a
+    // not-yet-started INTERRUPTED job could stay suppressed while still queued.
+    if (cancelRes?.cancelled || cancelRes?.hadActiveJob || cancelRes?.clearedPending) {
+      suppressJob(jobIdToCancel);
+      knownAlarmJobId = null;
+    }
     // Confirm handler will refine copy from the cancelled job result when it returns;
     // show best-known progress counts immediately (never invent "no LLM" if we saw calls).
     organizeStatus.textContent = formatOrganizeCancelMessage({
@@ -230,7 +371,7 @@ cancelBtn?.addEventListener('click', async () => {
 confirmBtn?.addEventListener('click', async () => {
   if (organizeBusy || !pendingPreview) return;
   const pending = pendingPreview;
-  const runId = (organizeRunId += 1);
+  const runId = (organizeRunId = nextOrganizeRunId());
   lastLlmCallsAttempted = 0;
   lastClassified = 0;
   activeJobId = null;
@@ -240,11 +381,11 @@ confirmBtn?.addEventListener('click', async () => {
 
   // FIRST await must be permissions.request to preserve the click user gesture.
   // Always request (not gated on stale hasApiKey): covers key/provider saved after preview.
-  // Includes both public provider defaults + preview endpoint + extract hosts.
+  // Extract hosts only when content extraction is enabled (optional_host_permissions).
   const allowed = await requestOrganizePermissions({
     endpointBaseUrl: pending.endpointBaseUrl,
     provider: pending.llmProvider,
-    includeExtractHosts: true,
+    includeExtractHosts: pending.contentExtractionEnabled !== false,
     includeAllProviderDefaults: true,
   });
 
@@ -342,7 +483,7 @@ onBackgroundBroadcast((message) => {
     // Always refresh Stacks so a cleared overflow gate hides Export/Discard.
     refreshStacks();
     if (pendingPreview) {
-      organizeRunId += 1;
+      organizeRunId = nextOrganizeRunId();
       hidePreview();
       setOrganizeIdle();
       organizeStatus.textContent =
@@ -350,9 +491,29 @@ onBackgroundBroadcast((message) => {
     }
     return;
   }
+  if (message.type === MSG.JOB_STATE) {
+    const jobId = typeof message.jobId === 'string' ? message.jobId : null;
+    if (adoptAlarmResumeState(message)) return;
+
+    // Terminal state for an alarm-adopted job (checkpoint cleared; jobId may be null).
+    if (
+      adoptedAlarmResume &&
+      organizePhase === 'running' &&
+      message.alarmResume !== true &&
+      !message.active &&
+      !message.resumable &&
+      (jobId == null || activeJobId === jobId)
+    ) {
+      endAdoptedAlarmResumeUi();
+    }
+    return;
+  }
   if (message.type !== MSG.GROUP_PROGRESS) return;
 
-  // Ignore progress for superseded / cancelled runs.
+  // Ignore progress for superseded / cancelled runs / suppressed alarm jobs.
+  if (typeof message.jobId === 'string' && suppressedJobIds.has(message.jobId)) {
+    return;
+  }
   if (organizePhase === 'idle' || organizePhase === 'preview' || organizePhase === 'confirming') {
     return;
   }
@@ -741,3 +902,9 @@ function escapeHtml(s) {
 
 refreshStacks();
 refreshLogicalTopics();
+// Reopened panel: adopt in-flight alarm resume if SW already has a checkpoint.
+sendToBackground(MSG.GET_JOB_STATE)
+  .then((state) => {
+    if (state?.ok !== false) adoptAlarmResumeState(state || {});
+  })
+  .catch(() => {});

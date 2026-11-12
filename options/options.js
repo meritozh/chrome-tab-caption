@@ -16,6 +16,8 @@ const fields = [
   'stackSize',
   'autoDedupeEnabled',
   'dedupeMode',
+  'contentExtractionEnabled',
+  'dailyLlmQuota',
 ];
 
 /**
@@ -62,9 +64,15 @@ function readForm() {
       continue;
     }
     if (el.type === 'number') {
-      // Blank → Number('') === 0, which isFinite — treat empty/non-positive as default.
       const raw = String(el.value ?? '').trim();
       const n = Number(raw);
+      if (name === 'dailyLlmQuota') {
+        // 0 = unlimited; blank falls back to default.
+        patch[name] =
+          raw !== '' && Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_CONFIG[name];
+        continue;
+      }
+      // Blank → Number('') === 0, which isFinite — treat empty/non-positive as default.
       patch[name] =
         raw !== '' && Number.isFinite(n) && n >= 1 ? n : DEFAULT_CONFIG[name];
     } else {
@@ -74,9 +82,43 @@ function readForm() {
   return patch;
 }
 
+/**
+ * @param {Record<string, unknown>} metrics
+ * @param {number} [dailyLlmQuota]
+ */
+function renderMetrics(metrics, dailyLlmQuota = 0) {
+  const list = document.getElementById('metrics-list');
+  if (!list) return;
+  const rows = [
+    ['organizeRuns', 'Organize runs'],
+    ['llmCalls', 'LLM calls (lifetime)'],
+    ['dailyLlmCalls', 'LLM calls (UTC today)'],
+    ['classifyErrors', 'Classify errors'],
+    ['dedupeCloses', 'Dedupe closes'],
+    ['reclaimCount', 'Reclaim count'],
+    ['alarmResumes', 'Alarm resumes'],
+  ];
+  const quotaLabel =
+    Number(dailyLlmQuota) > 0 ? String(dailyLlmQuota) : 'unlimited';
+  list.innerHTML =
+    rows
+      .map(
+        ([key, label]) =>
+          `<li><strong>${label}</strong>: ${Number(metrics?.[key]) || 0}</li>`,
+      )
+      .join('') + `<li><strong>dailyLlmQuota</strong>: ${quotaLabel}</li>`;
+}
+
 async function load() {
-  const res = await sendToBackground(MSG.GET_CONFIG);
+  const [res, metricsRes] = await Promise.all([
+    sendToBackground(MSG.GET_CONFIG),
+    sendToBackground(MSG.GET_METRICS).catch(() => null),
+  ]);
   fillForm(res?.config ?? DEFAULT_CONFIG);
+  renderMetrics(
+    metricsRes?.metrics || {},
+    metricsRes?.dailyLlmQuota ?? res?.config?.dailyLlmQuota ?? 0,
+  );
 }
 
 document.getElementById('options-form')?.addEventListener('submit', async (e) => {
@@ -86,6 +128,11 @@ document.getElementById('options-form')?.addEventListener('submit', async (e) =>
   const res = await sendToBackground(MSG.SET_CONFIG, { patch });
   status.textContent = res?.ok ? 'Saved.' : `Save failed: ${res?.error || 'unknown'}`;
   if (res?.config) fillForm(res.config);
+  const metricsRes = await sendToBackground(MSG.GET_METRICS).catch(() => null);
+  renderMetrics(
+    metricsRes?.metrics || {},
+    metricsRes?.dailyLlmQuota ?? res?.config?.dailyLlmQuota ?? 0,
+  );
 });
 
 document.getElementById('btn-test-llm')?.addEventListener('click', async () => {

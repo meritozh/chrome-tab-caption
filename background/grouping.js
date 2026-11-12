@@ -23,6 +23,16 @@ import { hasEndpointPermission } from '../shared/permissions.js';
 import { capExcerpt, persistTopicCache } from '../shared/topic-cache.js';
 import { extractTabContent } from '../content/extract.js';
 import { organizeCancelCheckpoint } from '../shared/organize-cancel.js';
+import {
+  JOB_PHASES,
+  createOrganizeCheckpoint,
+  isOrganizeCheckpoint,
+  remainingRefineItems,
+  advancePhase,
+  recordRefineStep,
+  bumpResumeCount,
+} from '../shared/task-state.js';
+import { canSpendLlmCall } from '../shared/metrics.js';
 
 /**
  * @typedef {import('../shared/topic-cache.js').TopicCacheLru} TopicCacheLru
@@ -216,7 +226,21 @@ function collapseHeuristicSynonyms(assignments, registry) {
 }
 
 /**
- * Full on-demand organize job.
+ * Persist + broadcast job checkpoint (fail-soft).
+ * @param {(cp: import('../shared/task-state.js').OrganizeCheckpoint) => void | Promise<void>} [onCheckpoint]
+ * @param {import('../shared/task-state.js').OrganizeCheckpoint} checkpoint
+ */
+async function emitCheckpoint(onCheckpoint, checkpoint) {
+  if (!onCheckpoint) return;
+  try {
+    await onCheckpoint(checkpoint);
+  } catch {
+    // storage / listeners may be unavailable
+  }
+}
+
+/**
+ * Full on-demand organize job (supports alarm resume via checkpoint).
  * @param {object} opts
  * @param {'all' | 'current'} [opts.scope]
  * @param {number} [opts.currentWindowId]
@@ -226,9 +250,14 @@ function collapseHeuristicSynonyms(assignments, registry) {
  * @param {{ useMock?: boolean }} [opts.llmOpts]
  * @param {AbortSignal} [opts.signal] — cooperative cancel between classify steps
  * @param {string} [opts.jobId]
+ * @param {import('../shared/task-state.js').OrganizeCheckpoint} [opts.resumeFrom]
+ * @param {(cp: import('../shared/task-state.js').OrganizeCheckpoint) => void | Promise<void>} [opts.onCheckpoint]
+ * @param {() => void | Promise<void>} [opts.onLlmSpend] — persist daily quota immediately per call
+ * @param {import('../shared/metrics.js').LocalMetrics} [opts.metrics]
+ * @param {number | null} [opts.clientRunId]
  */
 export async function groupTabsOnDemand(opts) {
-  if (!opts.confirmed) {
+  if (!opts.confirmed && !opts.resumeFrom?.confirmed) {
     return {
       ok: false,
       error: 'Privacy preview confirmation required before classify (ADR #12).',
@@ -236,23 +265,87 @@ export async function groupTabsOnDemand(opts) {
     };
   }
 
-  const scope = opts.scope === 'current' ? 'current' : 'all';
+  const resuming = isOrganizeCheckpoint(opts.resumeFrom);
+  const resumeCp = resuming ? opts.resumeFrom : null;
+  const scope = resuming
+    ? resumeCp.scope === 'current'
+      ? 'current'
+      : 'all'
+    : opts.scope === 'current'
+      ? 'current'
+      : 'all';
   const config = opts.config;
   const topicCache = opts.topicCache;
   const signal = opts.signal;
-  const deadline = createDeadline(TIMEOUTS.GROUP_JOB_MS);
-  const jobId = opts.jobId || `group-${Date.now()}`;
+  const onCheckpoint = opts.onCheckpoint;
+  const onLlmSpend = opts.onLlmSpend;
+  const metrics = opts.metrics;
+  const dailyQuota = Number(config.dailyLlmQuota) || 0;
+
+  const startedAt = resumeCp?.startedAt ?? Date.now();
+  // Fresh wall-clock budget on resume — SW sleep must not consume the original deadlineAt.
+  const deadlineMs = TIMEOUTS.GROUP_JOB_MS;
+  const deadline = createDeadline(deadlineMs);
+  const jobId = opts.jobId || resumeCp?.jobId || `group-${Date.now()}`;
+  const clientRunId =
+    opts.clientRunId != null
+      ? opts.clientRunId
+      : resumeCp?.clientRunId != null
+        ? resumeCp.clientRunId
+        : null;
 
   /** @type {Map<string, import('../shared/topic-normalize.js').TopicRecord>} */
   const topicRegistry = new Map();
   /** @type {TabTopicAssignment[]} */
-  const assignments = [];
+  const assignments = resuming && Array.isArray(resumeCp.assignments)
+    ? resumeCp.assignments.map((a) => ({ ...a }))
+    : [];
 
-  let classified = 0;
-  let classifyErrors = 0;
-  let llmCallsAttempted = 0;
+  // Rebuild synonym registry from resumed assignments.
+  for (const a of assignments) {
+    if (!a?.topicKey) continue;
+    if (!topicRegistry.has(a.topicKey)) {
+      topicRegistry.set(a.topicKey, {
+        label: a.topicLabel || a.topicKey,
+        normalizedKey: a.topicKey,
+        synonymKeys: [],
+      });
+    }
+  }
+
+  let classified = resumeCp?.classified ?? 0;
+  let classifyErrors = resumeCp?.classifyErrors ?? 0;
+  let llmCallsAttempted = resumeCp?.llmCallsAttempted ?? 0;
+  let resumeCount = resumeCp?.resumeCount ?? 0;
   /** @type {{ applied: number, errors: string[], latestWins?: boolean, stub?: boolean }} */
   let physical = { applied: 0, errors: [] };
+
+  /** @type {import('../shared/task-state.js').OrganizeCheckpoint} */
+  let checkpoint = createOrganizeCheckpoint({
+    ...(resumeCp || {}),
+    jobId,
+    scope,
+    confirmed: true,
+    clientRunId,
+    currentWindowId:
+      typeof opts.currentWindowId === 'number'
+        ? opts.currentWindowId
+        : resumeCp?.currentWindowId ?? null,
+    startedAt,
+    deadlineAt: Date.now() + deadlineMs,
+    assignments,
+    classified,
+    classifyErrors,
+    llmCallsAttempted,
+    useMock: opts.llmOpts?.useMock === true || resumeCp?.useMock === true,
+    resumeCount,
+    phase: resuming ? JOB_PHASES.REFINE : JOB_PHASES.QUEUED,
+  });
+
+  if (resuming) {
+    checkpoint = bumpResumeCount(checkpoint);
+    resumeCount = checkpoint.resumeCount;
+  }
 
   // Factory — buildLogicalTopicViews only runs when the signal is actually aborted.
   const cancelState = () => ({
@@ -271,13 +364,31 @@ export async function groupTabsOnDemand(opts) {
    */
   const checkCancel = () => organizeCancelCheckpoint(signal, cancelState);
 
+  const snapshotCheckpoint = (phase, patch = {}) => {
+    checkpoint = advancePhase(
+      createOrganizeCheckpoint({
+        ...checkpoint,
+        assignments: assignments.slice(),
+        classified,
+        classifyErrors,
+        llmCallsAttempted,
+        resumeCount,
+        ...patch,
+      }),
+      phase,
+      patch,
+    );
+    return checkpoint;
+  };
+
   const earlyCancel = checkCancel();
   if (!earlyCancel.continue) {
+    await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.CANCELLED));
     broadcastProgress({
       jobId,
       phase: 'cancelled',
       done: 0,
-      total: 0,
+      total: checkpoint.total || 0,
       llmCallsAttempted: 0,
       classified: 0,
       message: earlyCancel.result.message,
@@ -285,108 +396,176 @@ export async function groupTabsOnDemand(opts) {
     return earlyCancel.result;
   }
 
-  const allTabs = filterEligibleTabs(await queryTabsForScope(scope, opts.currentWindowId));
-  const total = allTabs.length;
-
-  broadcastProgress({
-    jobId,
-    phase: 'quick-pass',
-    done: 0,
-    total,
-    message: 'Quick pass: applying cached topics…',
-  });
-
   /** @type {{ tab: chrome.tabs.Tab, urlKey: string, contentHash: string }[]} */
-  const refineQueue = [];
+  let refineQueue = [];
+  let total = checkpoint.total || 0;
+  let refineStartIndex = 0;
 
-  // Pass 1 — cache hits
-  for (let i = 0; i < allTabs.length; i++) {
-    const cancelled = checkCancel();
-    if (!cancelled.continue) {
-      broadcastProgress({
-        jobId,
-        phase: 'cancelled',
-        done: assignments.length,
-        total,
-        llmCallsAttempted,
-        classified,
-        message: cancelled.result.message,
-      });
-      return cancelled.result;
-    }
-    if (deadline.expired()) break;
-    const tab = allTabs[i];
-    const urlKey = normalizeUrlKey(tab.url || '');
-    if (!urlKey) continue;
-    const contentHash = await computeContentHash({
-      title: tab.title || '',
-      excerpt: '',
-      url: urlKey,
-    });
-    const hit = topicCache.lookup(urlKey, contentHash);
-    if (hit) {
-      const topic = mergeTopicResult(
-        { topic: hit.topicLabel, synonyms: [] },
-        topicRegistry,
-      );
-      assignments.push({
-        tabId: /** @type {number} */ (tab.id),
-        windowId: /** @type {number} */ (tab.windowId),
-        topicKey: topic.normalizedKey,
-        topicLabel: topic.label,
-      });
-    } else {
-      refineQueue.push({ tab, urlKey, contentHash });
-    }
-    if (i % 8 === 0) {
-      broadcastProgress({
-        jobId,
-        phase: 'quick-pass',
-        done: i + 1,
-        total,
-        message: `Quick pass ${i + 1}/${total}`,
-      });
-    }
-  }
-
-  // Apply quick-pass physical groups early for responsiveness
-  {
-    const cancelled = checkCancel();
-    if (!cancelled.continue) {
-      await persistTopicCache(topicCache);
-      broadcastProgress({
-        jobId,
-        phase: 'cancelled',
-        done: assignments.length,
-        total,
-        llmCallsAttempted,
-        classified,
-        message: cancelled.result.message,
-      });
-      return cancelled.result;
-    }
-  }
-  if (assignments.length) {
-    const quickPlans = planPhysicalGroups(assignments);
-    physical = await applyPhysicalGroups(quickPlans);
+  if (resuming && Array.isArray(resumeCp.refineQueue) && resumeCp.refineQueue.length) {
+    refineStartIndex = Math.max(0, Number(resumeCp.refineIndex) || 0);
+    total = resumeCp.total || resumeCp.refineQueue.length + assignments.length;
     broadcastProgress({
       jobId,
-      phase: 'quick-pass-applied',
+      phase: 'refine',
       done: assignments.length,
       total,
-      applied: physical.applied,
-      message: `Cached groups applied (${physical.applied}). Refining ${refineQueue.length}…`,
+      resumeCount,
+      message: `Resuming Organize (alarm) — ${remainingRefineItems(resumeCp).length} tabs left…`,
     });
+    // Rebuild live tab refs for remaining refine items.
+    for (const item of resumeCp.refineQueue) {
+      let tab = null;
+      try {
+        tab = await chrome.tabs.get(item.tabId);
+      } catch {
+        tab = null;
+      }
+      refineQueue.push({
+        tab: tab || {
+          id: item.tabId,
+          windowId: item.windowId,
+          url: item.url,
+          title: item.title,
+        },
+        urlKey: item.urlKey,
+        contentHash: item.contentHash,
+      });
+    }
+    await emitCheckpoint(
+      onCheckpoint,
+      snapshotCheckpoint(JOB_PHASES.REFINE, {
+        total,
+        refineQueue: resumeCp.refineQueue,
+        refineIndex: refineStartIndex,
+      }),
+    );
+  } else {
+    const allTabs = filterEligibleTabs(await queryTabsForScope(scope, opts.currentWindowId));
+    total = allTabs.length;
+
+    await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.QUICK_PASS, { total }));
+    broadcastProgress({
+      jobId,
+      phase: 'quick-pass',
+      done: 0,
+      total,
+      message: 'Quick pass: applying cached topics…',
+    });
+
+    // Pass 1 — cache hits
+    for (let i = 0; i < allTabs.length; i++) {
+      const cancelled = checkCancel();
+      if (!cancelled.continue) {
+        await persistTopicCache(topicCache);
+        await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.CANCELLED, { total }));
+        broadcastProgress({
+          jobId,
+          phase: 'cancelled',
+          done: assignments.length,
+          total,
+          llmCallsAttempted,
+          classified,
+          message: cancelled.result.message,
+        });
+        return cancelled.result;
+      }
+      if (deadline.expired()) break;
+      const tab = allTabs[i];
+      const urlKey = normalizeUrlKey(tab.url || '');
+      if (!urlKey) continue;
+      const contentHash = await computeContentHash({
+        title: tab.title || '',
+        excerpt: '',
+        url: urlKey,
+      });
+      const hit = topicCache.lookup(urlKey, contentHash);
+      if (hit) {
+        const topic = mergeTopicResult(
+          { topic: hit.topicLabel, synonyms: [] },
+          topicRegistry,
+        );
+        assignments.push({
+          tabId: /** @type {number} */ (tab.id),
+          windowId: /** @type {number} */ (tab.windowId),
+          topicKey: topic.normalizedKey,
+          topicLabel: topic.label,
+        });
+      } else {
+        refineQueue.push({ tab, urlKey, contentHash });
+      }
+      if (i % 8 === 0) {
+        broadcastProgress({
+          jobId,
+          phase: 'quick-pass',
+          done: i + 1,
+          total,
+          message: `Quick pass ${i + 1}/${total}`,
+        });
+      }
+    }
+
+    // Apply quick-pass physical groups early for responsiveness
+    {
+      const cancelled = checkCancel();
+      if (!cancelled.continue) {
+        await persistTopicCache(topicCache);
+        await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.CANCELLED, { total }));
+        broadcastProgress({
+          jobId,
+          phase: 'cancelled',
+          done: assignments.length,
+          total,
+          llmCallsAttempted,
+          classified,
+          message: cancelled.result.message,
+        });
+        return cancelled.result;
+      }
+    }
+    if (assignments.length) {
+      const quickPlans = planPhysicalGroups(assignments);
+      physical = await applyPhysicalGroups(quickPlans);
+      broadcastProgress({
+        jobId,
+        phase: 'quick-pass-applied',
+        done: assignments.length,
+        total,
+        applied: physical.applied,
+        message: `Cached groups applied (${physical.applied}). Refining ${refineQueue.length}…`,
+      });
+    }
+
+    const persistedQueue = refineQueue.map(({ tab, urlKey, contentHash }) => ({
+      tabId: /** @type {number} */ (tab.id),
+      windowId: /** @type {number} */ (tab.windowId),
+      url: tab.url || '',
+      title: tab.title || '',
+      urlKey,
+      contentHash,
+    }));
+    await emitCheckpoint(
+      onCheckpoint,
+      snapshotCheckpoint(JOB_PHASES.QUICK_PASS_APPLIED, {
+        total,
+        refineQueue: persistedQueue,
+        refineIndex: 0,
+      }),
+    );
   }
 
   // Permission grant happens in Side Panel user-gesture; SW only checks containment.
-  const useMock = opts.llmOpts?.useMock === true || !config.apiKey || !config.llmProvider;
+  const useMock =
+    opts.llmOpts?.useMock === true ||
+    checkpoint.useMock === true ||
+    !config.apiKey ||
+    !config.llmProvider;
   if (!useMock) {
     const allowed = await hasEndpointPermission(
       /** @type {string} */ (config.endpointBaseUrl || ''),
       /** @type {string} */ (config.llmProvider || ''),
     );
     if (!allowed) {
+      await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.ERROR, { total }));
       return {
         ok: false,
         error:
@@ -400,6 +579,7 @@ export async function groupTabsOnDemand(opts) {
     const cancelled = checkCancel();
     if (!cancelled.continue) {
       await persistTopicCache(topicCache);
+      await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.CANCELLED, { total }));
       broadcastProgress({
         jobId,
         phase: 'cancelled',
@@ -421,11 +601,19 @@ export async function groupTabsOnDemand(opts) {
     useMock,
   });
 
-  // Pass 2 — refine queue
-  for (let i = 0; i < refineQueue.length; i++) {
+  // Pass 2 — refine queue (supports resume mid-queue)
+  for (let i = refineStartIndex; i < refineQueue.length; i++) {
     const cancelled = checkCancel();
     if (!cancelled.continue) {
       await persistTopicCache(topicCache);
+      await emitCheckpoint(
+        onCheckpoint,
+        snapshotCheckpoint(JOB_PHASES.CANCELLED, {
+          total,
+          refineIndex: i,
+          refineQueue: checkpoint.refineQueue,
+        }),
+      );
       broadcastProgress({
         jobId,
         phase: 'cancelled',
@@ -439,6 +627,14 @@ export async function groupTabsOnDemand(opts) {
     }
 
     if (deadline.expired()) {
+      await emitCheckpoint(
+        onCheckpoint,
+        snapshotCheckpoint(JOB_PHASES.TIMEOUT, {
+          total,
+          refineIndex: i,
+          refineQueue: checkpoint.refineQueue,
+        }),
+      );
       broadcastProgress({
         jobId,
         phase: 'timeout',
@@ -480,74 +676,139 @@ export async function groupTabsOnDemand(opts) {
 
     // Re-check cache with richer hash (title+excerpt)
     const rehit = topicCache.lookup(urlKey, contentHash) || topicCache.lookup(urlKey, priorHash);
+    /** @type {TabTopicAssignment | null} */
+    let stepAssignment = null;
     if (rehit) {
       const topic = mergeTopicResult(
         { topic: rehit.topicLabel, synonyms: [] },
         topicRegistry,
       );
-      assignments.push({
+      stepAssignment = {
         tabId: /** @type {number} */ (tab.id),
         windowId: /** @type {number} */ (tab.windowId),
         topicKey: topic.normalizedKey,
         topicLabel: topic.label,
-      });
-      continue;
-    }
+      };
+      assignments.push(stepAssignment);
+    } else {
+      const allowLlm =
+        useMock || metrics == null || canSpendLlmCall(metrics, dailyQuota);
+      if (!allowLlm) {
+        classifyErrors += 1;
+        broadcastProgress({
+          jobId,
+          phase: 'refine-error',
+          done: assignments.length,
+          total,
+          message: 'Daily LLM quota reached — skipping classify for remaining cache misses.',
+        });
+        checkpoint = recordRefineStep(
+          createOrganizeCheckpoint({
+            ...checkpoint,
+            assignments: assignments.slice(),
+            classified,
+            classifyErrors,
+            llmCallsAttempted,
+            refineQueue: checkpoint.refineQueue,
+            refineIndex: i,
+            total,
+          }),
+          { classifyErrors },
+        );
+        await emitCheckpoint(onCheckpoint, checkpoint);
+        continue;
+      }
 
-    llmCallsAttempted += 1;
-    try {
-      const result = await withTimeout(
-        client.classifyTopic({
-          url: tab.url || '',
-          title: tab.title || '',
-          snippet: excerpt,
-          extractedText: excerpt,
-        }),
-        Math.min(TIMEOUTS.CLASSIFY_MS, Math.max(500, deadline.remaining())),
-        'classify',
-      );
-      // Keep the in-flight result (request already sent); cancel stops the next queue item.
-      const topic = mergeTopicResult(result, topicRegistry);
-      topicCache.upsert({
-        urlKey,
-        contentHash,
-        topicKey: topic.normalizedKey,
-        topicLabel: topic.label,
-        excerpt,
-      });
-      // Also store under title-only hash used in quick pass for future hits
-      if (contentHash !== priorHash) {
+      llmCallsAttempted += 1;
+      // Persist spend immediately so SW kill mid-refine cannot lose daily quota counts.
+      if (typeof onLlmSpend === 'function') {
+        try {
+          await onLlmSpend();
+        } catch {
+          // fail-soft — still attempt classify
+        }
+      } else if (metrics && typeof metrics === 'object') {
+        metrics.dailyLlmCalls = (Number(metrics.dailyLlmCalls) || 0) + 1;
+        metrics.llmCalls = (Number(metrics.llmCalls) || 0) + 1;
+        metrics.dailyLlmDate =
+          metrics.dailyLlmDate || new Date().toISOString().slice(0, 10);
+      }
+      try {
+        const result = await withTimeout(
+          client.classifyTopic({
+            url: tab.url || '',
+            title: tab.title || '',
+            snippet: excerpt,
+            extractedText: excerpt,
+          }),
+          Math.min(TIMEOUTS.CLASSIFY_MS, Math.max(500, deadline.remaining())),
+          'classify',
+        );
+        // Keep the in-flight result (request already sent); cancel stops the next queue item.
+        const topic = mergeTopicResult(result, topicRegistry);
         topicCache.upsert({
           urlKey,
-          contentHash: priorHash,
+          contentHash,
           topicKey: topic.normalizedKey,
           topicLabel: topic.label,
           excerpt,
         });
+        // Also store under title-only hash used in quick pass for future hits
+        if (contentHash !== priorHash) {
+          topicCache.upsert({
+            urlKey,
+            contentHash: priorHash,
+            topicKey: topic.normalizedKey,
+            topicLabel: topic.label,
+            excerpt,
+          });
+        }
+        stepAssignment = {
+          tabId: /** @type {number} */ (tab.id),
+          windowId: /** @type {number} */ (tab.windowId),
+          topicKey: topic.normalizedKey,
+          topicLabel: topic.label,
+        };
+        assignments.push(stepAssignment);
+        classified += 1;
+      } catch (err) {
+        classifyErrors += 1;
+        broadcastProgress({
+          jobId,
+          phase: 'refine-error',
+          done: assignments.length,
+          total,
+          message: `Classify failed: ${err?.message || err}`,
+        });
       }
-      assignments.push({
-        tabId: /** @type {number} */ (tab.id),
-        windowId: /** @type {number} */ (tab.windowId),
-        topicKey: topic.normalizedKey,
-        topicLabel: topic.label,
-      });
-      classified += 1;
-    } catch (err) {
-      classifyErrors += 1;
-      broadcastProgress({
-        jobId,
-        phase: 'refine-error',
-        done: assignments.length,
-        total,
-        message: `Classify failed: ${err?.message || err}`,
-      });
     }
+
+    checkpoint = recordRefineStep(
+      createOrganizeCheckpoint({
+        ...checkpoint,
+        assignments: assignments.slice(),
+        classified,
+        classifyErrors,
+        llmCallsAttempted,
+        refineQueue: checkpoint.refineQueue,
+        refineIndex: i,
+        total,
+      }),
+      {
+        assignment: null, // already merged into assignments above
+        llmCallsAttempted,
+        classified,
+        classifyErrors,
+      },
+    );
+    await emitCheckpoint(onCheckpoint, checkpoint);
   }
 
   {
     const cancelled = checkCancel();
     if (!cancelled.continue) {
       await persistTopicCache(topicCache);
+      await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.CANCELLED, { total }));
       broadcastProgress({
         jobId,
         phase: 'cancelled',
@@ -561,6 +822,7 @@ export async function groupTabsOnDemand(opts) {
     }
   }
 
+  await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.APPLYING, { total }));
   collapseHeuristicSynonyms(assignments, topicRegistry);
 
   const logical = buildLogicalTopicViews(assignments);
@@ -568,6 +830,7 @@ export async function groupTabsOnDemand(opts) {
   physical = await applyPhysicalGroups(plans);
 
   await persistTopicCache(topicCache);
+  await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.DONE, { total }));
 
   broadcastProgress({
     jobId,
@@ -578,6 +841,7 @@ export async function groupTabsOnDemand(opts) {
     classified,
     classifyErrors,
     llmCallsAttempted,
+    resumeCount,
     message: `Done — ${logical.length} topics, ${physical.applied} window groups.`,
   });
 
@@ -592,6 +856,7 @@ export async function groupTabsOnDemand(opts) {
     classified,
     classifyErrors,
     llmCallsAttempted,
+    resumeCount,
     cacheSize: topicCache.size,
     latestWinsAt: Date.now(),
     latestWinsSource: 'extension-organize',
