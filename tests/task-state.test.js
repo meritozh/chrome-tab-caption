@@ -76,6 +76,7 @@ describe('organize task state machine', () => {
     const idle = summarizeJobState(null);
     assert.equal(idle.phase, JOB_PHASES.IDLE);
     assert.equal(idle.resumable, false);
+    assert.equal(idle.alarmResume, false);
 
     const cp = advancePhase(
       createOrganizeCheckpoint({
@@ -88,7 +89,13 @@ describe('organize task state machine', () => {
     const summary = summarizeJobState(cp);
     assert.equal(summary.resumable, true);
     assert.equal(summary.active, true);
+    assert.equal(summary.alarmResume, false); // normal refine is not alarm resume
     assert.equal(summary.remaining, 1);
     assert.equal(summary.jobId, 'g2');
+
+    const resumed = summarizeJobState(
+      createOrganizeCheckpoint({ ...cp, resumeCount: 1, phase: JOB_PHASES.REFINE }),
+    );
+    assert.equal(resumed.alarmResume, true);
   });
 });

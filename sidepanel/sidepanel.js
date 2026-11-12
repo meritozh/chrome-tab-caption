@@ -75,6 +75,11 @@ let organizeRunId = 0;
 let organizePhase = 'idle';
 /** @type {string | null} */
 let activeJobId = null;
+/** Side Panel adopted this job via alarm resume (not a local Confirm). */
+let adoptedAlarmResume = false;
+/** Job ids the user cancelled — do not re-adopt from JOB_STATE / progress. */
+/** @type {Set<string>} */
+const suppressedJobIds = new Set();
 /** Last known LLM calls started for this run (from progress / job result). */
 let lastLlmCallsAttempted = 0;
 let lastClassified = 0;
@@ -98,7 +103,21 @@ function hidePreview() {
 function setOrganizeIdle() {
   organizePhase = 'idle';
   activeJobId = null;
+  adoptedAlarmResume = false;
   setBusy(false);
+}
+
+/**
+ * Remember a cancelled job so alarm JOB_STATE cannot revive it.
+ * @param {string | null | undefined} jobId
+ */
+function suppressJob(jobId) {
+  if (!jobId || typeof jobId !== 'string') return;
+  suppressedJobIds.add(jobId);
+  if (suppressedJobIds.size > 32) {
+    const first = suppressedJobIds.values().next().value;
+    suppressedJobIds.delete(first);
+  }
 }
 
 /**
@@ -213,6 +232,7 @@ cancelBtn?.addEventListener('click', async () => {
   if (phase === 'running' || phase === 'cancelling') {
     organizePhase = 'cancelling';
     organizeStatus.textContent = 'Cancelling…';
+    suppressJob(activeJobId);
     hidePreview();
     await sendToBackground(MSG.CANCEL_GROUP, {
       clientRunId: cancelledRunId,
@@ -358,14 +378,18 @@ onBackgroundBroadcast((message) => {
     return;
   }
   if (message.type === MSG.JOB_STATE) {
-    const activeResume =
-      (message.active || message.resumable) &&
+    const jobId = typeof message.jobId === 'string' ? message.jobId : null;
+    const isAlarmResume =
+      message.alarmResume === true &&
       Number(message.remaining) > 0 &&
-      typeof message.jobId === 'string';
-    if (activeResume && (organizePhase === 'idle' || organizePhase === 'running')) {
-      // Adopt alarm-resumed job so Cancel + progress work (match jobId / clientRunId).
+      jobId &&
+      !suppressedJobIds.has(jobId);
+
+    // Only adopt when idle — never hijack an in-flight Confirm / normal Organize.
+    if (isAlarmResume && organizePhase === 'idle') {
+      adoptedAlarmResume = true;
       organizePhase = 'running';
-      activeJobId = message.jobId;
+      activeJobId = jobId;
       if (typeof message.clientRunId === 'number') {
         organizeRunId = message.clientRunId;
       }
@@ -376,37 +400,39 @@ onBackgroundBroadcast((message) => {
         previewPanel.hidden = false;
         const summary = document.getElementById('organize-preview-summary');
         if (summary) {
-          summary.textContent = message.resumable
-            ? `Resuming Organize — ${message.remaining} tabs left. Cancel still works.`
-            : `Organize in progress — ${message.remaining} tabs left.`;
+          summary.textContent = `Resuming Organize — ${message.remaining} tabs left. Cancel still works.`;
         }
       }
-      organizeStatus.textContent = message.resumable
-        ? `Alarm resume — ${message.remaining} tabs queued…`
-        : `Organizing — ${message.remaining} left…`;
-    } else if (
+      organizeStatus.textContent = `Alarm resume — ${message.remaining} tabs queued…`;
+      return;
+    }
+
+    // Terminal state for an alarm-adopted job (checkpoint cleared; jobId may be null).
+    if (
+      adoptedAlarmResume &&
+      organizePhase === 'running' &&
+      message.alarmResume !== true &&
       !message.active &&
       !message.resumable &&
-      organizePhase === 'running' &&
-      message.jobId &&
-      activeJobId === message.jobId
+      (jobId == null || activeJobId === jobId)
     ) {
-      setOrganizeIdle();
+      organizeStatus.textContent = `Done — resumed Organize finished (${lastClassified} classified).`;
       hidePreview();
+      setOrganizeIdle();
+      sendToBackground(MSG.GET_LOGICAL_TOPICS)
+        .then((res) => {
+          if (Array.isArray(res?.logical)) renderLogicalTopics(res.logical);
+        })
+        .catch(() => {});
     }
     return;
   }
   if (message.type !== MSG.GROUP_PROGRESS) return;
 
-  // Alarm-resumed progress may arrive while we were idle — adopt the job.
-  if (organizePhase === 'idle' && typeof message.jobId === 'string' && message.phase === 'refine') {
-    organizePhase = 'running';
-    activeJobId = message.jobId;
-    setBusy(true);
-    if (previewPanel) previewPanel.hidden = false;
+  // Ignore progress for superseded / cancelled runs / suppressed alarm jobs.
+  if (typeof message.jobId === 'string' && suppressedJobIds.has(message.jobId)) {
+    return;
   }
-
-  // Ignore progress for superseded / cancelled runs.
   if (organizePhase === 'idle' || organizePhase === 'preview' || organizePhase === 'confirming') {
     return;
   }

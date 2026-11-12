@@ -221,17 +221,27 @@ export function summarizeJobState(checkpoint) {
     return {
       phase: JOB_PHASES.IDLE,
       resumable: false,
+      alarmResume: false,
+      active: false,
       remaining: 0,
       jobId: null,
+      clientRunId: null,
     };
   }
   const remaining = remainingRefineItems(checkpoint).length;
+  const resumeCount = Math.max(0, Number(checkpoint.resumeCount) || 0);
   return {
     jobId: checkpoint.jobId,
     phase: checkpoint.phase,
     scope: checkpoint.scope,
     clientRunId: checkpoint.clientRunId,
     resumable: isResumablePhase(checkpoint.phase) && remaining > 0,
+    /**
+     * True only for alarm/SW-sleep continuation — not a normal in-progress Organize.
+     * Side Panel must adopt UI only when this is set (avoid hijacking Confirm).
+     */
+    alarmResume:
+      resumeCount > 0 || checkpoint.phase === JOB_PHASES.INTERRUPTED,
     /** True when the SW is actively refining (including alarm resume). */
     active: !isTerminalPhase(checkpoint.phase) && checkpoint.phase !== JOB_PHASES.IDLE,
     remaining,
@@ -240,7 +250,7 @@ export function summarizeJobState(checkpoint) {
     llmCallsAttempted: checkpoint.llmCallsAttempted,
     classified: checkpoint.classified,
     classifyErrors: checkpoint.classifyErrors,
-    resumeCount: checkpoint.resumeCount,
+    resumeCount,
     updatedAt: checkpoint.updatedAt,
     deadlineAt: checkpoint.deadlineAt,
   };
