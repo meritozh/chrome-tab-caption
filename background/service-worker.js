@@ -649,13 +649,14 @@ function onMessage(message, sender, sendResponse) {
 
         const cpMem = organizeCheckpoint;
 
-        // Abort ONLY by unique jobId. clientRunId is not unique across side panels
-        // (each starts at its own counter) — it only feeds cancelledClientRunIds for
-        // preemptive cancel before GROUP_TABS registers.
+        // Abort when jobId matches, OR when clientRunId matches the active job.
+        // Side panels mint unique clientRunIds (timestamp+random), so clientRunId
+        // abort is safe across windows and covers Cancel after Confirm enters
+        // running but before the first GROUP_PROGRESS delivers jobId.
         const matchActive =
-          activeOrganizeJob &&
-          requestJobId != null &&
-          activeOrganizeJob.jobId === requestJobId;
+          !!activeOrganizeJob &&
+          ((requestJobId != null && activeOrganizeJob.jobId === requestJobId) ||
+            (clientRunId != null && activeOrganizeJob.clientRunId === clientRunId));
 
         let hadActiveJob = false;
         let cancelledJobId = requestJobId;
@@ -666,10 +667,12 @@ function onMessage(message, sender, sendResponse) {
           hadActiveJob = true;
         }
 
-        // Drop pending checkpoint only when jobId matches (or we just aborted that job).
+        // Drop pending checkpoint when jobId/clientRunId matches (or we just aborted that job).
         let droppedMemCheckpoint = false;
         const cpMatchesJob =
-          cpMem && requestJobId != null && cpMem.jobId === requestJobId;
+          !!cpMem &&
+          ((requestJobId != null && cpMem.jobId === requestJobId) ||
+            (clientRunId != null && cpMem.clientRunId === clientRunId));
         if (cpMatchesJob || (hadActiveJob && cpMem && cpMem.jobId === cancelledJobId)) {
           markOrganizeJobCancelled(cpMem.jobId);
           organizeCheckpoint = null;
