@@ -151,7 +151,7 @@ body {
   background: transparent;
   color: var(--muted);
   padding: 0.4rem 0.7rem;
-  border-radius: 999px;
+  border-radius: 8px;
   cursor: pointer;
   font: inherit;
   font-weight: 550;
