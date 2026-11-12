@@ -14,6 +14,8 @@ const fields = [
   'maxOpenTabs',
   'cacheSize',
   'stackSize',
+  'autoDedupeEnabled',
+  'dedupeMode',
 ];
 
 /**
@@ -53,6 +55,10 @@ function readForm() {
       // Omit empty / redacted so SET_CONFIG preserves the stored secret.
       if (isApiKeyUnchanged(el.value)) continue;
       patch.apiKey = el.value;
+      continue;
+    }
+    if (el.type === 'checkbox') {
+      patch[name] = /** @type {HTMLInputElement} */ (el).checked;
       continue;
     }
     if (el.type === 'number') {

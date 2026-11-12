@@ -11,6 +11,11 @@ function makeTabsApi(initialTabs) {
     async query() {
       return [...tabs.values()];
     },
+    async get(id) {
+      const t = tabs.get(id);
+      if (!t) throw new Error(`missing tab ${id}`);
+      return t;
+    },
     async remove(id) {
       if (!tabs.has(id)) throw new Error(`missing tab ${id}`);
       tabs.delete(id);
@@ -62,6 +67,43 @@ describe('maybeReclaim integration (mocked tabs)', () => {
     assert.equal(tabsApi._tabs.size, 2);
     // suppressClosed: ids were registered during close (cleared by SW onRemoved in prod)
     assert.ok(closingTabIds.has(4) || closingTabIds.has(2));
+  });
+
+  it('does not keep a StackRecord when remove races alreadyClosed', async () => {
+    const tabsApi = makeTabsApi([
+      { id: 1, url: 'https://a.test/1', lastAccessed: 100, windowId: 1 },
+      { id: 2, url: 'https://a.test/2', lastAccessed: 10, windowId: 1 },
+      { id: 3, url: 'https://a.test/3', lastAccessed: 5, windowId: 1, active: true },
+    ]);
+    // Simulate user/dedupe already closing the reclaim target.
+    const doomed = 2;
+    tabsApi.remove = async (id) => {
+      if (id === doomed) {
+        tabsApi._tabs.delete(id);
+        throw new Error(`No tab with id: ${id}`);
+      }
+      if (!tabsApi._tabs.has(id)) throw new Error(`missing tab ${id}`);
+      tabsApi._tabs.delete(id);
+    };
+    tabsApi.get = async (id) => {
+      if (!tabsApi._tabs.has(id)) throw new Error(`missing tab ${id}`);
+      return tabsApi._tabs.get(id);
+    };
+    const store = new StackRecordStore(500);
+    const result = await maybeReclaim({
+      config: { maxOpenTabs: 1, stackSize: 500, autoStackEnabled: true },
+      stackStore: store,
+      closingTabIds: new Set(),
+      tabsApi,
+      probeUnload: false,
+      setOverflowPending: async () => {},
+    });
+    // Target 2 was alreadyClosed — must not leave a stack record for it.
+    assert.equal(
+      store.list().some((r) => r.url === 'https://a.test/2'),
+      false,
+    );
+    assert.ok((result.reclaimed ?? 0) >= 0);
   });
 
   it('pauses reclaim and reports overflow when stack is full', async () => {
