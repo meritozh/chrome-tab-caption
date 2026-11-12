@@ -28,7 +28,6 @@ import { runAutoDedupe } from './dedupe.js';
 import { buildOverflowPending } from '../shared/reclaim-policy.js';
 import {
   loadMetrics,
-  persistMetrics,
   bumpMetrics,
   mergeMetrics,
 } from '../shared/metrics.js';
@@ -209,6 +208,7 @@ async function persistOrganizeCheckpoint(checkpoint) {
  * @param {object} opts
  */
 async function runOrganizeJob(opts) {
+  const jobId = opts.jobId;
   const metricsSnapshot = mergeMetrics(localMetrics);
   const result = await groupTabsOnDemand({
     ...opts,
@@ -217,22 +217,32 @@ async function runOrganizeJob(opts) {
     onCheckpoint: async (cp) => {
       await persistOrganizeCheckpoint(cp);
     },
+    onLlmSpend: async () => {
+      localMetrics = await bumpMetrics({ spendDailyLlm: 1 });
+      metricsSnapshot.dailyLlmCalls = localMetrics.dailyLlmCalls;
+      metricsSnapshot.llmCalls = localMetrics.llmCalls;
+      metricsSnapshot.dailyLlmDate = localMetrics.dailyLlmDate;
+    },
   });
-  // Sync mutated daily counters back (LLM spends mutate the snapshot in-place).
-  localMetrics = await persistMetrics(mergeMetrics(metricsSnapshot));
   if (result?.ok) {
     localMetrics = await bumpMetrics({
       organizeRuns: 1,
       classifyErrors: Number(result.classifyErrors) || 0,
     });
   }
-  // Drop resumable checkpoint after terminal success/cancel/timeout so alarms stop.
+  // Drop resumable checkpoint only for *this* job — a superseded cancel must not
+  // wipe a successor Organize that already wrote its own checkpoint / alarm.
+  const finishedJobId = result?.jobId || jobId;
+  const ownsCheckpoint =
+    !organizeCheckpoint ||
+    (finishedJobId && organizeCheckpoint.jobId === finishedJobId);
   const terminal =
-    result?.ok ||
-    result?.cancelled ||
-    result?.needsPermission ||
-    isTerminalPhase(organizeCheckpoint?.phase);
-  if (terminal) {
+    ownsCheckpoint &&
+    (result?.ok ||
+      result?.cancelled ||
+      result?.needsPermission ||
+      isTerminalPhase(organizeCheckpoint?.phase));
+  if (terminal && ownsCheckpoint) {
     await clearOrganizeResumeAlarm();
     await saveOrganizeCheckpoint(null);
     organizeCheckpoint = null;
@@ -249,7 +259,16 @@ async function maybeResumeOrganizeFromCheckpoint() {
   await ensureHydrated();
   const cp = organizeCheckpoint || (await loadOrganizeCheckpoint());
   organizeCheckpoint = cp;
-  if (!shouldResumeCheckpoint(cp)) return null;
+  if (!shouldResumeCheckpoint(cp)) {
+    // Alarms survive browser restart; session checkpoints do not — clear orphans.
+    await clearOrganizeResumeAlarm();
+    if (cp) {
+      await saveOrganizeCheckpoint(null);
+      organizeCheckpoint = null;
+      broadcastJobState();
+    }
+    return null;
+  }
 
   organizeResumeInFlight = true;
   const controller = new AbortController();
@@ -259,6 +278,7 @@ async function maybeResumeOrganizeFromCheckpoint() {
     controller,
     clientRunId: typeof cp.clientRunId === 'number' ? cp.clientRunId : null,
   };
+  broadcastJobState();
   try {
     await bumpMetrics({ alarmResumes: 1 });
     localMetrics = await loadMetrics();
@@ -576,6 +596,7 @@ function onMessage(message, sender, sendResponse) {
       case MSG.CANCEL_GROUP: {
         const clientRunId =
           typeof message.clientRunId === 'number' ? message.clientRunId : null;
+        const requestJobId = typeof message.jobId === 'string' ? message.jobId : null;
         if (clientRunId != null) {
           cancelledClientRunIds.add(clientRunId);
           // Bound memory — keep only recent cancel marks.
@@ -584,9 +605,13 @@ function onMessage(message, sender, sendResponse) {
             cancelledClientRunIds.delete(first);
           }
         }
+        // Match by clientRunId, jobId (alarm resume), or bare cancel of the active job.
         const match =
           activeOrganizeJob &&
-          (clientRunId == null || activeOrganizeJob.clientRunId === clientRunId);
+          ((clientRunId == null && requestJobId == null) ||
+            (clientRunId != null && activeOrganizeJob.clientRunId === clientRunId) ||
+            (requestJobId != null && activeOrganizeJob.jobId === requestJobId) ||
+            message.cancelActive === true);
         if (match && activeOrganizeJob) {
           const { jobId, controller } = activeOrganizeJob;
           controller.abort();
@@ -595,7 +620,7 @@ function onMessage(message, sender, sendResponse) {
         } else {
           sendResponse({
             ok: true,
-            cancelled: clientRunId != null,
+            cancelled: clientRunId != null || requestJobId != null,
             hadActiveJob: false,
             preemptive: clientRunId != null,
           });

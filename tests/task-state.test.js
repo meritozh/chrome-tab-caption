@@ -87,6 +87,7 @@ describe('organize task state machine', () => {
     );
     const summary = summarizeJobState(cp);
     assert.equal(summary.resumable, true);
+    assert.equal(summary.active, true);
     assert.equal(summary.remaining, 1);
     assert.equal(summary.jobId, 'g2');
   });

@@ -214,7 +214,11 @@ cancelBtn?.addEventListener('click', async () => {
     organizePhase = 'cancelling';
     organizeStatus.textContent = 'Cancelling…';
     hidePreview();
-    await sendToBackground(MSG.CANCEL_GROUP, { clientRunId: cancelledRunId }).catch(() => {});
+    await sendToBackground(MSG.CANCEL_GROUP, {
+      clientRunId: cancelledRunId,
+      jobId: activeJobId || undefined,
+      cancelActive: true,
+    }).catch(() => {});
     // Confirm handler will refine copy from the cancelled job result when it returns;
     // show best-known progress counts immediately (never invent "no LLM" if we saw calls).
     organizeStatus.textContent = formatOrganizeCancelMessage({
@@ -354,12 +358,53 @@ onBackgroundBroadcast((message) => {
     return;
   }
   if (message.type === MSG.JOB_STATE) {
-    if (message.resumable && message.remaining > 0 && organizePhase === 'idle') {
-      organizeStatus.textContent = `Organize interrupted — ${message.remaining} tabs queued; alarm will resume.`;
+    const activeResume =
+      (message.active || message.resumable) &&
+      Number(message.remaining) > 0 &&
+      typeof message.jobId === 'string';
+    if (activeResume && (organizePhase === 'idle' || organizePhase === 'running')) {
+      // Adopt alarm-resumed job so Cancel + progress work (match jobId / clientRunId).
+      organizePhase = 'running';
+      activeJobId = message.jobId;
+      if (typeof message.clientRunId === 'number') {
+        organizeRunId = message.clientRunId;
+      }
+      lastLlmCallsAttempted = Number(message.llmCallsAttempted) || lastLlmCallsAttempted;
+      lastClassified = Number(message.classified) || lastClassified;
+      setBusy(true);
+      if (previewPanel) {
+        previewPanel.hidden = false;
+        const summary = document.getElementById('organize-preview-summary');
+        if (summary) {
+          summary.textContent = message.resumable
+            ? `Resuming Organize — ${message.remaining} tabs left. Cancel still works.`
+            : `Organize in progress — ${message.remaining} tabs left.`;
+        }
+      }
+      organizeStatus.textContent = message.resumable
+        ? `Alarm resume — ${message.remaining} tabs queued…`
+        : `Organizing — ${message.remaining} left…`;
+    } else if (
+      !message.active &&
+      !message.resumable &&
+      organizePhase === 'running' &&
+      message.jobId &&
+      activeJobId === message.jobId
+    ) {
+      setOrganizeIdle();
+      hidePreview();
     }
     return;
   }
   if (message.type !== MSG.GROUP_PROGRESS) return;
+
+  // Alarm-resumed progress may arrive while we were idle — adopt the job.
+  if (organizePhase === 'idle' && typeof message.jobId === 'string' && message.phase === 'refine') {
+    organizePhase = 'running';
+    activeJobId = message.jobId;
+    setBusy(true);
+    if (previewPanel) previewPanel.hidden = false;
+  }
 
   // Ignore progress for superseded / cancelled runs.
   if (organizePhase === 'idle' || organizePhase === 'preview' || organizePhase === 'confirming') {

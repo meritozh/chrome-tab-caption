@@ -230,7 +230,10 @@ export function summarizeJobState(checkpoint) {
     jobId: checkpoint.jobId,
     phase: checkpoint.phase,
     scope: checkpoint.scope,
+    clientRunId: checkpoint.clientRunId,
     resumable: isResumablePhase(checkpoint.phase) && remaining > 0,
+    /** True when the SW is actively refining (including alarm resume). */
+    active: !isTerminalPhase(checkpoint.phase) && checkpoint.phase !== JOB_PHASES.IDLE,
     remaining,
     total: checkpoint.total,
     refineIndex: checkpoint.refineIndex,

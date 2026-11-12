@@ -252,6 +252,7 @@ async function emitCheckpoint(onCheckpoint, checkpoint) {
  * @param {string} [opts.jobId]
  * @param {import('../shared/task-state.js').OrganizeCheckpoint} [opts.resumeFrom]
  * @param {(cp: import('../shared/task-state.js').OrganizeCheckpoint) => void | Promise<void>} [opts.onCheckpoint]
+ * @param {() => void | Promise<void>} [opts.onLlmSpend] — persist daily quota immediately per call
  * @param {import('../shared/metrics.js').LocalMetrics} [opts.metrics]
  * @param {number | null} [opts.clientRunId]
  */
@@ -277,13 +278,13 @@ export async function groupTabsOnDemand(opts) {
   const topicCache = opts.topicCache;
   const signal = opts.signal;
   const onCheckpoint = opts.onCheckpoint;
+  const onLlmSpend = opts.onLlmSpend;
   const metrics = opts.metrics;
   const dailyQuota = Number(config.dailyLlmQuota) || 0;
 
   const startedAt = resumeCp?.startedAt ?? Date.now();
-  const deadlineMs = resumeCp?.deadlineAt
-    ? Math.max(0, resumeCp.deadlineAt - Date.now())
-    : TIMEOUTS.GROUP_JOB_MS;
+  // Fresh wall-clock budget on resume — SW sleep must not consume the original deadlineAt.
+  const deadlineMs = TIMEOUTS.GROUP_JOB_MS;
   const deadline = createDeadline(deadlineMs);
   const jobId = opts.jobId || resumeCp?.jobId || `group-${Date.now()}`;
   const clientRunId =
@@ -719,8 +720,14 @@ export async function groupTabsOnDemand(opts) {
       }
 
       llmCallsAttempted += 1;
-      // Reflect spend in caller's metrics object (SW persists separately).
-      if (metrics && typeof metrics === 'object') {
+      // Persist spend immediately so SW kill mid-refine cannot lose daily quota counts.
+      if (typeof onLlmSpend === 'function') {
+        try {
+          await onLlmSpend();
+        } catch {
+          // fail-soft — still attempt classify
+        }
+      } else if (metrics && typeof metrics === 'object') {
         metrics.dailyLlmCalls = (Number(metrics.dailyLlmCalls) || 0) + 1;
         metrics.llmCalls = (Number(metrics.llmCalls) || 0) + 1;
         metrics.dailyLlmDate =
