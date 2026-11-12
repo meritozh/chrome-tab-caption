@@ -1,0 +1,5 @@
+{
+  "type": "commonjs",
+  "private": true,
+  "description": "Vendored @mozilla/readability 0.6.0 (Apache-2.0) for classic-script executeScript injection."
+}

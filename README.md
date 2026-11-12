@@ -14,6 +14,7 @@ On-demand LLM topic grouping for Chrome tabs: organize when you ask, cache what 
 | **Privacy** | 自配 endpoint；API key 仅存本地；发送前字段预览 | Your endpoint, local key, always preview payload fields |
 | **Dedupe** | 同规范化 URL（同窗或跨窗）自动关闭较旧副本（保留 active/audible/pinned/最近；跳过未保存） | Auto-close-older for normalized URLs within/across windows |
 | **Stacks** | 超过 `maxOpenTabs` 时回收到可搜索归档；召回恢复分组；触及 `stackSize` 先警告再导出/丢弃 | Reclaim past maxOpenTabs into searchable archive; recall restores groups; overflow warns then export/discard |
+| **Extract** | Organize 时按需抽取主文本（Mozilla Readability + ≤~280 excerpt）；非常驻 content script | On-demand main-text extract (Mozilla Readability + ≤~280 excerpt); no always-on content scripts |
 
 Product decisions live in the Project ADR (`docs/tab-manager-adr.md`). Chrome Web Store packaging notes: `docs/chrome-web-store-checklist.md`.
 
