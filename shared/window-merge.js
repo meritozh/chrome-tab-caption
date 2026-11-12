@@ -161,13 +161,14 @@ export function stackMetaFromAssignment(assignment, fallback = null) {
 
 /**
  * Whether config requests the single-window Organize merge path.
+ * Legacy `cross-window-logical` was superseded 2026-11-13 and still merges.
  * @param {Record<string, unknown> | null | undefined} config
  */
 export function isSingleWindowMergeScope(config) {
   const scope = config?.groupScope;
-  // Default / accepted value; treat unknown legacy as merge when unset.
+  // Default / accepted / superseded legacy → merge.
   if (scope == null || scope === '') return true;
   if (scope === 'single-window-merge') return true;
-  if (scope === 'cross-window-logical') return false;
+  if (scope === 'cross-window-logical') return true;
   return scope !== 'per-window';
 }

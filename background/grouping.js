@@ -873,13 +873,13 @@ export async function groupTabsOnDemand(opts) {
           broadcastProgress({ jobId, done: assignments.length, total, ...payload });
         },
       });
-      if (Array.isArray(merge.remappedAssignments) && merge.remappedAssignments.length) {
+      // Empty remappedAssignments/plans are valid (e.g. every classified tab stacked).
+      if (Array.isArray(merge.remappedAssignments)) {
         finalAssignments = /** @type {TabTopicAssignment[]} */ (merge.remappedAssignments);
       }
-      const plans =
-        Array.isArray(merge.plans) && merge.plans.length
-          ? merge.plans
-          : planPhysicalGroups(finalAssignments);
+      const plans = Array.isArray(merge.plans)
+        ? merge.plans
+        : planPhysicalGroups(finalAssignments);
       physical = await applyPhysicalGroups(plans);
       if (Array.isArray(merge.errors) && merge.errors.length) {
         physical = {

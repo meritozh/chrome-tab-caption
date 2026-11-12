@@ -110,10 +110,11 @@ describe('window-merge pure helpers', () => {
     assert.equal(meta.groupColor, 'blue');
   });
 
-  it('treats single-window-merge as default groupScope', () => {
+  it('treats single-window-merge and superseded cross-window-logical as merge', () => {
     assert.equal(isSingleWindowMergeScope({}), true);
     assert.equal(isSingleWindowMergeScope({ groupScope: 'single-window-merge' }), true);
-    assert.equal(isSingleWindowMergeScope({ groupScope: 'cross-window-logical' }), false);
+    assert.equal(isSingleWindowMergeScope({ groupScope: 'cross-window-logical' }), true);
+    assert.equal(isSingleWindowMergeScope({ groupScope: 'per-window' }), false);
   });
 });
 

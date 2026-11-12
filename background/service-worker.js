@@ -188,6 +188,9 @@ async function toggleSidePanelForTab(tab) {
   }
 }
 
+/** Guard — onInstalled/onStartup/cold-start must not stack action.onClicked handlers. */
+let panelBehaviorInitialized = false;
+
 async function initPanelBehavior() {
   // Manual toggle via action.onClicked — openPanelOnActionClick cannot close.
   try {
@@ -195,11 +198,14 @@ async function initPanelBehavior() {
   } catch (err) {
     console.warn('[tab-caption] setPanelBehavior failed', err);
   }
+  if (panelBehaviorInitialized) return;
+  panelBehaviorInitialized = true;
   try {
     chrome.action.onClicked.addListener((tab) => {
       void toggleSidePanelForTab(tab);
     });
   } catch (err) {
+    panelBehaviorInitialized = false;
     console.warn('[tab-caption] action.onClicked failed', err);
   }
 }
@@ -860,7 +866,12 @@ function onMessage(message, sender, sendResponse) {
             latestWinsSource: 'extension-organize-cancelled',
           });
         }
-        scheduleReclaim();
+        // Single-window Organize already reclaimed excess by lastAccessed keep-set.
+        // A follow-up maybeReclaim would steal from that keep set when pinned/protected
+        // excess leave open count above maxOpenTabs.
+        if (!(result?.ok && result?.merge)) {
+          scheduleReclaim();
+        }
         sendResponse(result);
         break;
       }

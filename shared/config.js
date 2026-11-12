@@ -36,10 +36,15 @@ export function sanitizeConfigPatch(patch) {
  * @returns {typeof DEFAULT_CONFIG & Record<string, unknown>}
  */
 export function mergeConfig(partial) {
-  return {
+  const next = {
     ...DEFAULT_CONFIG,
     ...(partial && typeof partial === 'object' ? partial : {}),
   };
+  // ADR 2026-11-13: coerce superseded stored value so Organize always merges.
+  if (next.groupScope === 'cross-window-logical') {
+    next.groupScope = 'single-window-merge';
+  }
+  return next;
 }
 
 /**
