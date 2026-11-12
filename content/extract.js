@@ -1,16 +1,39 @@
 /**
- * On-demand content extract stub (ADR §3.1 / §5.2).
+ * On-demand content extract (ADR §3.1 / §5.2 / Phase 6).
  * NOT registered as always-on content_scripts — injected via chrome.scripting.executeScript
- * after a successful page load. Mature open-source extractor selection is Phase 6 follow-up.
- * Phase 2: title + URL + short excerpt is enough; fail-soft on timeout / CSP.
+ * after a successful page load / during Organize refine.
+ *
+ * Pipeline: vendor Mozilla Readability → landmarks → meta → title+URL fail-soft.
+ * Hard excerpt cap (~280); intermediate buffer cap (4000).
  */
 
-import { EXCERPT_HARD_CAP_CHARS, TIMEOUTS } from '../shared/constants.js';
+import {
+  EXCERPT_HARD_CAP_CHARS,
+  TIMEOUTS,
+} from '../shared/constants.js';
 import { withTimeout } from '../shared/async-timeout.js';
+import {
+  EXTRACT_BUFFER_CAP_CHARS,
+  assembleExtractResult,
+} from '../shared/extract-text.js';
 
 /**
- * Best-effort main-text sketch for executeScript injection (page world).
- * Keep free of imports — serialized as a function into the tab.
+ * Page-world call site — must be import-free (serialized into the tab).
+ * Relies on prior injection of vendor/Readability.js + content/extract-page.js.
+ * @param {number} bufferCap
+ */
+export function callInjectedExtract(bufferCap) {
+  const runner =
+    typeof globalThis !== 'undefined' ? globalThis.__tabCaptionExtractPage : null;
+  if (typeof runner !== 'function') {
+    return { title: '', meta: '', text: '', source: 'empty' };
+  }
+  return runner({ bufferCap });
+}
+
+/**
+ * Best-effort landmark sketch kept for tests / environments without Readability files.
+ * Prefer extractTabContent (full pipeline) in production.
  * @param {number} [cap]
  * @returns {{ title: string, excerpt: string, source: 'stub' }}
  */
@@ -28,48 +51,76 @@ export function extractPageExcerpt(cap = EXCERPT_HARD_CAP_CHARS) {
 }
 
 /**
- * SW-facing extract: on-demand executeScript with fail-soft fallback to title+URL.
+ * SW-facing extract: on-demand executeScript with fail-soft fallback to title+URL+meta.
  * @param {number} tabId
- * @param {{ title?: string, url?: string, timeoutMs?: number }} [fallback]
+ * @param {{ title?: string, url?: string, timeoutMs?: number, bufferCap?: number, excerptCap?: number }} [fallback]
  */
 export async function extractTabContent(tabId, fallback = {}) {
   const base = {
     title: fallback.title ?? '',
     url: fallback.url ?? '',
     excerpt: '',
+    meta: '',
     source: 'fallback-title-url',
   };
 
-  if (typeof tabId !== 'number' || !globalThis.chrome?.scripting?.executeScript) {
+  const scripting = globalThis.chrome?.scripting;
+  if (typeof tabId !== 'number' || !scripting?.executeScript) {
     return { ...base, error: 'scripting unavailable' };
   }
 
   const timeoutMs = fallback.timeoutMs ?? TIMEOUTS.EXTRACT_MS;
+  const bufferCap = fallback.bufferCap ?? EXTRACT_BUFFER_CAP_CHARS;
+  const excerptCap = fallback.excerptCap ?? EXCERPT_HARD_CAP_CHARS;
 
   try {
     const results = await withTimeout(
-      chrome.scripting.executeScript({
-        target: { tabId },
-        func: extractPageExcerpt,
-        args: [EXCERPT_HARD_CAP_CHARS],
-      }),
+      (async () => {
+        // Classic scripts: Readability global, then page runner, then invoke.
+        await scripting.executeScript({
+          target: { tabId },
+          files: [
+            'vendor/mozilla-readability/Readability.js',
+            'content/extract-page.js',
+          ],
+        });
+        return scripting.executeScript({
+          target: { tabId },
+          func: callInjectedExtract,
+          args: [bufferCap],
+        });
+      })(),
       timeoutMs,
       'extract',
     );
+
     const first = results?.[0]?.result;
     if (first && typeof first === 'object') {
-      return {
-        title: first.title || base.title,
-        url: base.url,
-        excerpt: first.excerpt || '',
-        source: first.source || 'stub',
-      };
+      return assembleExtractResult(
+        {
+          title: first.title || base.title,
+          url: base.url,
+          text: first.text || '',
+          meta: first.meta || '',
+          source: first.source || 'empty',
+        },
+        { excerptCap, bufferCap },
+      );
     }
-    return { ...base, error: 'empty extract result' };
+    return assembleExtractResult(
+      { ...base, text: '', meta: '', source: 'empty', error: 'empty extract result' },
+      { excerptCap, bufferCap },
+    );
   } catch (err) {
-    return {
-      ...base,
-      error: String(err?.message || err),
-    };
+    return assembleExtractResult(
+      {
+        ...base,
+        text: '',
+        meta: '',
+        source: 'empty',
+        error: String(err?.message || err),
+      },
+      { excerptCap, bufferCap },
+    );
   }
 }

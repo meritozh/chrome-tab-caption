@@ -10,7 +10,7 @@ export const DEFAULT_ENDPOINT_BY_PROVIDER = Object.freeze({
   'openai-responses': 'https://api.openai.com',
 });
 
-/** Optional patterns needed for on-demand executeScript extract (Phase 2 stub). */
+/** Optional patterns needed for on-demand executeScript extract (Phase 6 Readability). */
 export const EXTRACT_HOST_PATTERNS = Object.freeze(['http://*/*', 'https://*/*']);
 
 /**
