@@ -15,8 +15,9 @@ On-demand LLM topic grouping for Chrome tabs: organize when you ask, cache what 
 | **Dedupe** | 同规范化 URL（同窗或跨窗）自动关闭较旧副本（保留 active/audible/pinned/最近；跳过未保存） | Auto-close-older for normalized URLs within/across windows |
 | **Stacks** | 超过 `maxOpenTabs` 时回收到可搜索归档；召回恢复分组；触及 `stackSize` 先警告再导出/丢弃 | Reclaim past maxOpenTabs into searchable archive; recall restores groups; overflow warns then export/discard |
 | **Extract** | Organize 时按需抽取主文本（Mozilla Readability + ≤~280 excerpt）；非常驻 content script | On-demand main-text extract (Mozilla Readability + ≤~280 excerpt); no always-on content scripts |
+| **Hardening** | Organize 任务状态机 + `alarms` 续跑；本地计数 / 可选日配额；optional host；商店权限/隐私文案 | Task state machine + alarm resume; local metrics / optional daily LLM quota; optional hosts; store permissions & privacy outline |
 
-Product decisions live in the Project ADR (`docs/tab-manager-adr.md`). Chrome Web Store packaging notes: `docs/chrome-web-store-checklist.md`.
+Product decisions: `docs/decisions-log.md` (Accepted + §10 borrow notes). Store packaging: `docs/chrome-web-store/permissions.md`, `docs/chrome-web-store/privacy-policy-outline.md`.
 
 ## Load unpacked
 
@@ -25,9 +26,11 @@ Product decisions live in the Project ADR (`docs/tab-manager-adr.md`). Chrome We
 3. Click the action icon → **Side Panel** opens (no popup)
 4. **Options** → set provider / endpoint / API key / model → Save
 5. Options → **Dedupe** → leave auto-close-older enabled (default) to collapse same-URL tabs across windows
-6. Side Panel → **Organize tabs** → review privacy preview → **Confirm & classify**
+6. Options → **Content & cost** → leave extraction on (optional hosts at Confirm); set `dailyLlmQuota` if you want a UTC-day cap (`0` = unlimited)
+7. Side Panel → **Organize tabs** → review privacy preview → **Confirm & classify**
+8. Options → **Local metrics** shows on-device counters (organize / LLM / dedupe / reclaim / alarm resumes)
 
-`TEST_LLM` uses a mock client. API keys stay in `chrome.storage.local` only — never commit them.
+`TEST_LLM` uses a mock client. API keys stay in `chrome.storage.local` only — never commit them. If the service worker sleeps mid-Organize, a checkpoint + `chrome.alarms` resume continues the refine queue.
 
 ### Try Search (Side Panel)
 

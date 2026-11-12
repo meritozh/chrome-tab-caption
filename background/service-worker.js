@@ -1,11 +1,12 @@
 /**
- * Service worker orchestrator (ADR Phase 0–5).
+ * Service worker orchestrator (ADR Phase 0–7).
  * Unique orchestration center: events, debounce, jobs, LLM, Chrome side-effects.
  * UI only sends MSG.* — keys & tab mutations stay here.
  * Grouping is on-demand only — never auto-group on tab complete.
  * Phase 3: fuzzy + pinyin search over open tabs and stackRecords.
  * Phase 4: Stacks reclaim / recall; overflow warn → export or discard.
  * Phase 5: Cross-window auto-dedupe (before reclaim).
+ * Phase 7: Task state machine + alarm resume + local metrics.
  */
 
 import { MSG, DEFAULT_CONFIG, SESSION_KEYS, TIMEOUTS, STORAGE_KEYS } from '../shared/constants.js';
@@ -25,11 +26,37 @@ import { runSearchQuery } from './search.js';
 import { maybeReclaim, recallStack, exportOrDiscardStacks } from './stacks.js';
 import { runAutoDedupe } from './dedupe.js';
 import { buildOverflowPending } from '../shared/reclaim-policy.js';
+import {
+  loadMetrics,
+  persistMetrics,
+  bumpMetrics,
+  mergeMetrics,
+} from '../shared/metrics.js';
+import {
+  ALARM_NAMES,
+  ensureMaintainAlarm,
+  ensureOrganizeResumeAlarm,
+  clearOrganizeResumeAlarm,
+} from '../shared/alarms.js';
+import {
+  loadOrganizeCheckpoint,
+  saveOrganizeCheckpoint,
+  interruptOrganizeCheckpoint,
+  shouldResumeCheckpoint,
+  summarizeJobState,
+} from './job-checkpoint.js';
+import { isTerminalPhase, JOB_PHASES } from '../shared/task-state.js';
 
 /** @type {TopicCacheLru} */
 let topicCache = new TopicCacheLru(DEFAULT_CONFIG.cacheSize);
 /** @type {StackRecordStore} */
 let stackStore = new StackRecordStore(DEFAULT_CONFIG.stackSize);
+/** @type {import('../shared/metrics.js').LocalMetrics} */
+let localMetrics = mergeMetrics(null);
+/** @type {import('../shared/task-state.js').OrganizeCheckpoint | null} */
+let organizeCheckpoint = null;
+/** Prevent overlapping resume / organize jobs. */
+let organizeResumeInFlight = false;
 
 /** @type {{ logical: import('../shared/physical-groups.js').PhysicalGroupPlan[] | unknown[], latestWinsAt: number, source: string } | null} */
 let lastOrganizeState = null;
@@ -89,11 +116,13 @@ async function hydrateFromStorage() {
   const config = await loadConfig();
   topicCache = await loadTopicCache(config.cacheSize);
   stackStore = await loadStackRecords(config.stackSize);
+  localMetrics = await loadMetrics();
   // Restore logical topics across SW restarts (session-scoped).
   try {
     const stored = await chrome.storage.session.get([
       SESSION_KEYS.LAST_ORGANIZE,
       SESSION_KEYS.STACKS_OVERFLOW_PENDING,
+      SESSION_KEYS.ORGANIZE_CHECKPOINT,
     ]);
     const last = stored?.[SESSION_KEYS.LAST_ORGANIZE];
     if (last && Array.isArray(last.logical)) {
@@ -106,6 +135,8 @@ async function hydrateFromStorage() {
     const pending = stored?.[SESSION_KEYS.STACKS_OVERFLOW_PENDING];
     overflowPending =
       pending && typeof pending === 'object' && pending.needsUserAction ? pending : null;
+    const cp = stored?.[SESSION_KEYS.ORGANIZE_CHECKPOINT];
+    organizeCheckpoint = cp && typeof cp.jobId === 'string' ? cp : null;
   } catch {
     // session storage may be unavailable
   }
@@ -129,12 +160,135 @@ async function hydrateFromStorage() {
 
 function ensureHydrated() {
   if (!hydratePromise) {
-    hydratePromise = hydrateFromStorage().catch((err) => {
-      console.warn('[tab-caption] hydrate failed', err);
-      hydratePromise = null;
-    });
+    hydratePromise = hydrateFromStorage()
+      .then(async () => {
+        // After cold start: mark any mid-flight job interrupted and try alarm resume.
+        if (organizeCheckpoint && !isTerminalPhase(organizeCheckpoint.phase) && !activeOrganizeJob) {
+          organizeCheckpoint = await interruptOrganizeCheckpoint();
+          broadcastJobState();
+        }
+      })
+      .catch((err) => {
+        console.warn('[tab-caption] hydrate failed', err);
+        hydratePromise = null;
+      });
   }
   return hydratePromise;
+}
+
+/**
+ * Broadcast JOB_STATE to Side Panel (fail-soft).
+ */
+function broadcastJobState() {
+  try {
+    chrome.runtime
+      .sendMessage({ type: MSG.JOB_STATE, ...summarizeJobState(organizeCheckpoint) })
+      .catch(() => {});
+  } catch {
+    // no listeners
+  }
+}
+
+/**
+ * Persist checkpoint + keep/clear resume alarm.
+ * @param {import('../shared/task-state.js').OrganizeCheckpoint | null} checkpoint
+ */
+async function persistOrganizeCheckpoint(checkpoint) {
+  organizeCheckpoint = checkpoint;
+  await saveOrganizeCheckpoint(checkpoint);
+  if (checkpoint && !isTerminalPhase(checkpoint.phase)) {
+    await ensureOrganizeResumeAlarm();
+  } else {
+    await clearOrganizeResumeAlarm();
+  }
+  broadcastJobState();
+}
+
+/**
+ * Run Organize with checkpoint hooks (fresh or resume).
+ * @param {object} opts
+ */
+async function runOrganizeJob(opts) {
+  const metricsSnapshot = mergeMetrics(localMetrics);
+  const result = await groupTabsOnDemand({
+    ...opts,
+    topicCache,
+    metrics: metricsSnapshot,
+    onCheckpoint: async (cp) => {
+      await persistOrganizeCheckpoint(cp);
+    },
+  });
+  // Sync mutated daily counters back (LLM spends mutate the snapshot in-place).
+  localMetrics = await persistMetrics(mergeMetrics(metricsSnapshot));
+  if (result?.ok) {
+    localMetrics = await bumpMetrics({
+      organizeRuns: 1,
+      classifyErrors: Number(result.classifyErrors) || 0,
+    });
+  }
+  // Drop resumable checkpoint after terminal success/cancel/timeout so alarms stop.
+  const terminal =
+    result?.ok ||
+    result?.cancelled ||
+    result?.needsPermission ||
+    isTerminalPhase(organizeCheckpoint?.phase);
+  if (terminal) {
+    await clearOrganizeResumeAlarm();
+    await saveOrganizeCheckpoint(null);
+    organizeCheckpoint = null;
+    broadcastJobState();
+  }
+  return result;
+}
+
+/**
+ * Alarm / cold-start resume of an interrupted Organize refine queue.
+ */
+async function maybeResumeOrganizeFromCheckpoint() {
+  if (organizeResumeInFlight || activeOrganizeJob) return null;
+  await ensureHydrated();
+  const cp = organizeCheckpoint || (await loadOrganizeCheckpoint());
+  organizeCheckpoint = cp;
+  if (!shouldResumeCheckpoint(cp)) return null;
+
+  organizeResumeInFlight = true;
+  const controller = new AbortController();
+  const jobId = cp.jobId;
+  activeOrganizeJob = {
+    jobId,
+    controller,
+    clientRunId: typeof cp.clientRunId === 'number' ? cp.clientRunId : null,
+  };
+  try {
+    await bumpMetrics({ alarmResumes: 1 });
+    localMetrics = await loadMetrics();
+    const config = await loadConfig();
+    const result = await runOrganizeJob({
+      scope: cp.scope,
+      currentWindowId: cp.currentWindowId ?? undefined,
+      confirmed: true,
+      config,
+      llmOpts: { useMock: cp.useMock === true },
+      signal: controller.signal,
+      jobId,
+      clientRunId: cp.clientRunId,
+      resumeFrom: cp,
+    });
+    if (result?.ok) {
+      await rememberOrganizeState(result);
+    } else if (result?.cancelled && Array.isArray(result.logical) && result.logical.length) {
+      await rememberOrganizeState({
+        logical: result.logical,
+        latestWinsAt: Date.now(),
+        latestWinsSource: 'extension-organize-cancelled',
+      });
+    }
+    scheduleReclaim();
+    return result;
+  } finally {
+    if (activeOrganizeJob?.jobId === jobId) activeOrganizeJob = null;
+    organizeResumeInFlight = false;
+  }
 }
 
 /**
@@ -269,7 +423,12 @@ async function runDedupePass() {
     activityLog,
   });
   try {
-    return await dedupeInFlight;
+    const result = await dedupeInFlight;
+    const closed = Number(result?.closed) || 0;
+    if (closed > 0) {
+      localMetrics = await bumpMetrics({ dedupeCloses: closed });
+    }
+    return result;
   } finally {
     dedupeInFlight = null;
   }
@@ -309,7 +468,17 @@ async function runReclaimPass() {
     activityLog,
   });
   try {
-    return await reclaimInFlight;
+    const result = await reclaimInFlight;
+    const reclaimed = Number(result?.reclaimed) || 0;
+    if (reclaimed > 0) {
+      localMetrics = await bumpMetrics({ reclaimCount: reclaimed });
+    }
+    // Dedupe nested inside reclaim also reports closed counts.
+    const nestedClosed = Number(result?.dedupe?.closed) || 0;
+    if (nestedClosed > 0) {
+      localMetrics = await bumpMetrics({ dedupeCloses: nestedClosed });
+    }
+    return result;
   } finally {
     reclaimInFlight = null;
   }
@@ -421,6 +590,7 @@ function onMessage(message, sender, sendResponse) {
         if (match && activeOrganizeJob) {
           const { jobId, controller } = activeOrganizeJob;
           controller.abort();
+          await clearOrganizeResumeAlarm();
           sendResponse({ ok: true, cancelled: true, jobId, hadActiveJob: true });
         } else {
           sendResponse({
@@ -479,15 +649,16 @@ function onMessage(message, sender, sendResponse) {
         const currentWindowId = await resolveCurrentWindowId(message, sender);
         let result;
         try {
-          result = await groupTabsOnDemand({
+          await ensureOrganizeResumeAlarm();
+          result = await runOrganizeJob({
             scope: message.scope === 'current' ? 'current' : 'all',
             currentWindowId,
             confirmed: true,
-            topicCache,
             config,
             llmOpts: { useMock: message.useMock === true },
             signal: controller.signal,
             jobId,
+            clientRunId,
           });
         } finally {
           if (activeOrganizeJob?.jobId === jobId) {
@@ -621,6 +792,23 @@ function onMessage(message, sender, sendResponse) {
         sendResponse({ ok: true, entries: activityLog.list(), stub: false });
         break;
       }
+      case MSG.GET_JOB_STATE: {
+        const cp = organizeCheckpoint || (await loadOrganizeCheckpoint());
+        organizeCheckpoint = cp;
+        sendResponse({ ok: true, ...summarizeJobState(cp), stub: false });
+        break;
+      }
+      case MSG.GET_METRICS: {
+        localMetrics = await loadMetrics();
+        const config = await loadConfig();
+        sendResponse({
+          ok: true,
+          metrics: localMetrics,
+          dailyLlmQuota: Number(config.dailyLlmQuota) || 0,
+          stub: false,
+        });
+        break;
+      }
       default:
         sendResponse({ ok: false, error: `unknown type: ${type}` });
     }
@@ -665,12 +853,18 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   scheduleReclaim();
 });
 
-// Periodic maintenance wake (MV3 SW) — reclaim / overflow resume.
+// Periodic maintenance + Organize alarm resume (MV3 SW).
 try {
-  chrome.alarms.create('tab-caption-maintain', { periodInMinutes: 1 });
+  ensureMaintainAlarm();
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm?.name === 'tab-caption-maintain') {
+    if (alarm?.name === ALARM_NAMES.MAINTAIN) {
       scheduleReclaim();
+      return;
+    }
+    if (alarm?.name === ALARM_NAMES.ORGANIZE_RESUME) {
+      maybeResumeOrganizeFromCheckpoint().catch((err) => {
+        console.warn('[tab-caption] organize resume failed', err);
+      });
     }
   });
 } catch {

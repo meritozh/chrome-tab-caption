@@ -59,6 +59,7 @@ const scopeSelect = /** @type {HTMLSelectElement | null} */ (document.getElement
  * @property {string} endpointBaseUrl
  * @property {string} llmProvider
  * @property {boolean} hasApiKey
+ * @property {boolean} contentExtractionEnabled
  */
 
 /** @type {PendingOrganize | null} */
@@ -125,6 +126,7 @@ function renderOrganizePreview(preview, meta) {
     endpointBaseUrl: meta.endpointBaseUrl || '',
     llmProvider: meta.llmProvider || '',
     hasApiKey: Boolean(meta.hasApiKey),
+    contentExtractionEnabled: meta.contentExtractionEnabled !== false,
   };
   organizePhase = 'preview';
   if (!previewPanel) return;
@@ -177,6 +179,7 @@ organizeBtn?.addEventListener('click', async () => {
     endpointBaseUrl: cfg?.config?.endpointBaseUrl || '',
     llmProvider: cfg?.config?.llmProvider || '',
     hasApiKey: Boolean(cfg?.config?.hasApiKey),
+    contentExtractionEnabled: cfg?.config?.contentExtractionEnabled !== false,
   });
   organizeStatus.textContent = 'Review fields, then confirm to classify cache misses.';
 });
@@ -240,11 +243,11 @@ confirmBtn?.addEventListener('click', async () => {
 
   // FIRST await must be permissions.request to preserve the click user gesture.
   // Always request (not gated on stale hasApiKey): covers key/provider saved after preview.
-  // Includes both public provider defaults + preview endpoint + extract hosts.
+  // Extract hosts only when content extraction is enabled (optional_host_permissions).
   const allowed = await requestOrganizePermissions({
     endpointBaseUrl: pending.endpointBaseUrl,
     provider: pending.llmProvider,
-    includeExtractHosts: true,
+    includeExtractHosts: pending.contentExtractionEnabled !== false,
     includeAllProviderDefaults: true,
   });
 
@@ -347,6 +350,12 @@ onBackgroundBroadcast((message) => {
       setOrganizeIdle();
       organizeStatus.textContent =
         'Settings changed — run Organize again to refresh the privacy preview.';
+    }
+    return;
+  }
+  if (message.type === MSG.JOB_STATE) {
+    if (message.resumable && message.remaining > 0 && organizePhase === 'idle') {
+      organizeStatus.textContent = `Organize interrupted — ${message.remaining} tabs queued; alarm will resume.`;
     }
     return;
   }
