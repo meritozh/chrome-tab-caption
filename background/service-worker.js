@@ -616,14 +616,38 @@ function onMessage(message, sender, sendResponse) {
           const { jobId, controller } = activeOrganizeJob;
           controller.abort();
           await clearOrganizeResumeAlarm();
+          await saveOrganizeCheckpoint(null);
+          organizeCheckpoint = null;
+          broadcastJobState();
           sendResponse({ ok: true, cancelled: true, jobId, hadActiveJob: true });
         } else {
-          sendResponse({
-            ok: true,
-            cancelled: clientRunId != null || requestJobId != null,
-            hadActiveJob: false,
-            preemptive: clientRunId != null,
-          });
+          // No in-flight job yet (INTERRUPTED waiting for alarm) — still drop the
+          // checkpoint so a later alarm cannot resume after the user cancelled.
+          const cp = organizeCheckpoint || (await loadOrganizeCheckpoint());
+          const pendingMatches =
+            cp &&
+            (requestJobId == null || cp.jobId === requestJobId) &&
+            (message.cancelActive === true || requestJobId != null);
+          if (pendingMatches) {
+            await clearOrganizeResumeAlarm();
+            await saveOrganizeCheckpoint(null);
+            organizeCheckpoint = null;
+            broadcastJobState();
+            sendResponse({
+              ok: true,
+              cancelled: true,
+              jobId: cp.jobId,
+              hadActiveJob: false,
+              clearedPending: true,
+            });
+          } else {
+            sendResponse({
+              ok: true,
+              cancelled: clientRunId != null || requestJobId != null,
+              hadActiveJob: false,
+              preemptive: clientRunId != null,
+            });
+          }
         }
         break;
       }
