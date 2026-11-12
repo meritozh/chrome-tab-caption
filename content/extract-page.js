@@ -3,6 +3,9 @@
  * Injected via chrome.scripting.executeScript({ files }) after vendor/Readability.js.
  * No ESM imports — must stay serializable as a classic content script.
  * Exposes globalThis.__tabCaptionExtractPage(opts).
+ *
+ * Always gathers meta + landmarks first (cheap). Readability only runs when
+ * skipReadability is false and document element count ≤ maxElemsToParse.
  */
 (function initTabCaptionExtractPage(global) {
   /** @param {number} [bufferCap] */
@@ -33,43 +36,57 @@
   }
 
   /**
-   * @param {{ bufferCap?: number }} [opts]
+   * @param {{
+   *   bufferCap?: number,
+   *   maxElemsToParse?: number,
+   *   skipReadability?: boolean,
+   * }} [opts]
    * @returns {{ title: string, meta: string, text: string, source: string }}
    */
   function extractPageMain(opts) {
+    const o = opts && typeof opts === 'object' ? opts : {};
     const bufferCap =
-      opts && typeof opts.bufferCap === 'number' && opts.bufferCap > 0
-        ? opts.bufferCap
-        : 4000;
+      typeof o.bufferCap === 'number' && o.bufferCap > 0 ? o.bufferCap : 4000;
+    const maxElems =
+      typeof o.maxElemsToParse === 'number' && o.maxElemsToParse > 0
+        ? o.maxElemsToParse
+        : 3000;
+    const skipReadability = Boolean(o.skipReadability);
+
     const title = typeof document !== 'undefined' ? document.title || '' : '';
     const meta = typeof document !== 'undefined' ? readMeta(bufferCap) : '';
+    const landmarks =
+      typeof document !== 'undefined' ? readLandmarks(bufferCap) : '';
 
-    let text = '';
-    let source = 'empty';
+    let text = landmarks;
+    let source = landmarks ? 'landmarks' : meta ? 'meta' : 'empty';
+    if (!landmarks && meta) {
+      text = meta;
+    }
 
-    if (typeof document !== 'undefined' && typeof global.Readability === 'function') {
+    if (
+      !skipReadability &&
+      typeof document !== 'undefined' &&
+      typeof global.Readability === 'function'
+    ) {
       try {
-        const clone = document.cloneNode(true);
-        const article = new global.Readability(clone).parse();
-        const body = article && article.textContent ? String(article.textContent) : '';
-        const trimmed = body.replace(/\s+/g, ' ').trim();
-        if (trimmed) {
-          text = trimmed.length > bufferCap ? trimmed.slice(0, bufferCap) : trimmed;
-          source = 'readability';
+        const numTags = document.getElementsByTagName('*').length;
+        // Skip clone+parse entirely on oversized DOMs (also enforced inside Readability).
+        if (numTags <= maxElems) {
+          const clone = document.cloneNode(true);
+          const article = new global.Readability(clone, {
+            maxElemsToParse: maxElems,
+          }).parse();
+          const body = article && article.textContent ? String(article.textContent) : '';
+          const trimmed = body.replace(/\s+/g, ' ').trim();
+          if (trimmed) {
+            text = trimmed.length > bufferCap ? trimmed.slice(0, bufferCap) : trimmed;
+            source = 'readability';
+          }
         }
       } catch (_err) {
-        // fail-soft → landmarks / meta
+        // Keep landmarks/meta already gathered.
       }
-    }
-
-    if (!text && typeof document !== 'undefined') {
-      text = readLandmarks(bufferCap);
-      if (text) source = 'landmarks';
-    }
-
-    if (!text && meta) {
-      text = meta;
-      source = 'meta';
     }
 
     return { title, meta, text, source };

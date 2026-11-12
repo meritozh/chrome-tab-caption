@@ -10,6 +10,12 @@ import { capExcerpt } from './topic-cache.js';
 export const EXTRACT_BUFFER_CAP_CHARS = 4000;
 
 /**
+ * Abort Readability (and skip document.cloneNode) above this element count.
+ * Mozilla default is 0 (unlimited); we bound it so large tabs fail fast to landmarks/meta.
+ */
+export const EXTRACT_MAX_ELEMS_TO_PARSE = 3000;
+
+/**
  * Collapse whitespace / strip control chars for LLM-friendly structured text.
  * @param {string | null | undefined} text
  * @param {number} [bufferCap]

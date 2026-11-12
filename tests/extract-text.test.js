@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   EXTRACT_BUFFER_CAP_CHARS,
+  EXTRACT_MAX_ELEMS_TO_PARSE,
   cleanStructuredText,
   readMetaDescription,
   readLandmarkText,
@@ -23,6 +24,7 @@ describe('cleanStructuredText', () => {
 
   it('defaults buffer cap to EXTRACT_BUFFER_CAP_CHARS', () => {
     assert.equal(EXTRACT_BUFFER_CAP_CHARS, 4000);
+    assert.equal(EXTRACT_MAX_ELEMS_TO_PARSE, 3000);
     const cleaned = cleanStructuredText('a'.repeat(5000));
     assert.equal(cleaned.length, 4000);
   });
@@ -119,6 +121,8 @@ describe('extractTabContent', () => {
     const prev = globalThis.chrome;
     /** @type {string[][]} */
     const fileBatches = [];
+    /** @type {object[]} */
+    const callOpts = [];
     globalThis.chrome = {
       scripting: {
         async executeScript(details) {
@@ -127,9 +131,11 @@ describe('extractTabContent', () => {
             return [];
           }
           if (details.func) {
+            const opts = details.args?.[0];
+            callOpts.push(opts);
             return [
               {
-                result: details.func(details.args?.[0]),
+                result: details.func(opts),
               },
             ];
           }
@@ -137,12 +143,22 @@ describe('extractTabContent', () => {
         },
       },
     };
-    globalThis.__tabCaptionExtractPage = () => ({
-      title: 'Page Title',
-      meta: 'meta',
-      text: 'z'.repeat(500),
-      source: 'readability',
-    });
+    globalThis.__tabCaptionExtractPage = (opts) => {
+      if (opts?.skipReadability) {
+        return {
+          title: 'Page Title',
+          meta: 'meta',
+          text: 'landmark body text for topic',
+          source: 'landmarks',
+        };
+      }
+      return {
+        title: 'Page Title',
+        meta: 'meta',
+        text: 'z'.repeat(500),
+        source: 'readability',
+      };
+    };
     try {
       const result = await extractTabContent(42, {
         title: 'fallback',
@@ -152,12 +168,56 @@ describe('extractTabContent', () => {
         'vendor/mozilla-readability/Readability.js',
         'content/extract-page.js',
       ]);
+      assert.equal(callOpts[0]?.skipReadability, true);
+      assert.equal(callOpts[1]?.skipReadability, false);
       assert.equal(result.source, 'readability');
       assert.equal(result.title, 'Page Title');
       assert.ok(result.excerpt.length <= EXCERPT_HARD_CAP_CHARS);
       assert.equal(result.url, 'https://news.test/a');
     } finally {
       delete globalThis.__tabCaptionExtractPage;
+      globalThis.chrome = prev;
+    }
+  });
+
+  it('keeps landmarks/meta when Readability phase times out', async () => {
+    const prev = globalThis.chrome;
+    let phase = 0;
+    globalThis.chrome = {
+      scripting: {
+        async executeScript(details) {
+          if (details.files) return [];
+          phase += 1;
+          if (phase === 1) {
+            // cheap
+            return [
+              {
+                result: {
+                  title: 'Heavy',
+                  meta: 'meta description',
+                  text: 'cheap landmark excerpt',
+                  source: 'landmarks',
+                },
+              },
+            ];
+          }
+          // readability phase hangs past timeout
+          await new Promise(() => {});
+          return [];
+        },
+      },
+    };
+    try {
+      // Budget large enough to enter Readability phase (>=200ms remaining after cheap).
+      const result = await extractTabContent(9, {
+        title: 'fallback',
+        url: 'https://heavy.test/',
+        timeoutMs: 350,
+      });
+      assert.equal(result.source, 'landmarks');
+      assert.match(result.excerpt, /cheap landmark/);
+      assert.match(result.error || '', /extract-readability|timed out/i);
+    } finally {
       globalThis.chrome = prev;
     }
   });
@@ -191,7 +251,7 @@ describe('callInjectedExtract', () => {
     const prev = globalThis.__tabCaptionExtractPage;
     delete globalThis.__tabCaptionExtractPage;
     try {
-      assert.deepEqual(callInjectedExtract(100), {
+      assert.deepEqual(callInjectedExtract({ bufferCap: 100 }), {
         title: '',
         meta: '',
         text: '',
