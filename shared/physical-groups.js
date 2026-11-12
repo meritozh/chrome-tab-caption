@@ -1,7 +1,7 @@
 /**
- * Physical per-window tabGroups planning (ADR §3.1 / §5.3).
- * Logical topics may span windows; physical writes never tabs.move across windows.
- * Same window + same topicKey → at most one chrome.tabGroups entity.
+ * Physical tabGroups planning helpers (ADR §3.1 / §5.3).
+ * Organize single-window merge remaps assignments to one window first
+ * (see shared/window-merge.js); same window + same topicKey → one group.
  */
 
 /**
@@ -47,7 +47,7 @@ export function colorForTopicKey(topicKey) {
 
 /**
  * Collapse assignments into per-window physical group plans.
- * Never mixes windowIds inside a plan.
+ * Does not mix windowIds inside a plan (caller merges windows first for Organize).
  * @param {TabTopicAssignment[]} assignments
  * @returns {PhysicalGroupPlan[]}
  */

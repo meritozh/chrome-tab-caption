@@ -1,5 +1,6 @@
 /**
- * Side Panel — Organize CTA with privacy preview confirm, search stub, Stacks stub.
+ * Side Panel — primary Organize UI (privacy preview confirm), Search, Stacks.
+ * Toolbar icon toggles this panel; Options is settings-only.
  * No LLM side-effects here; messages go to the service worker.
  */
 
@@ -11,6 +12,19 @@ import {
   isPreviewOnlyCancel,
   shouldApplyOrganizeCompletion,
 } from '../shared/organize-cancel.js';
+
+/** Long-lived port so the service worker can toggle-close this panel. */
+const sidePanelPort = chrome.runtime.connect({ name: 'side-panel' });
+void (async () => {
+  try {
+    const win = await chrome.windows.getCurrent();
+    if (typeof win?.id === 'number') {
+      sidePanelPort.postMessage({ type: 'SIDE_PANEL_HELLO', windowId: win.id });
+    }
+  } catch {
+    // window id optional — SW still tracks the port
+  }
+})();
 
 const views = {
   main: document.getElementById('view-main'),
@@ -45,7 +59,13 @@ const confirmBtn = document.getElementById('btn-confirm-organize');
 const cancelBtn = document.getElementById('btn-cancel-organize');
 const organizeStatus = document.getElementById('organize-status');
 const previewPanel = document.getElementById('organize-preview');
+const progressTrack = document.getElementById('organize-progress-track');
 const scopeSelect = /** @type {HTMLSelectElement | null} */ (document.getElementById('group-scope'));
+
+function setOrganizeProgressVisible(visible) {
+  if (progressTrack) progressTrack.hidden = !visible;
+  organizeStatus?.classList.toggle('is-running', Boolean(visible));
+}
 
 /**
  * @typedef {object} PendingOrganize
@@ -106,6 +126,7 @@ function setBusy(busy) {
   if (cancelBtn) cancelBtn.disabled = false;
   // Keep scope locked while a preview is pending so Confirm matches what was reviewed.
   if (scopeSelect) scopeSelect.disabled = busy || Boolean(pendingPreview);
+  if (!busy) setOrganizeProgressVisible(false);
 }
 
 function hidePreview() {
@@ -196,6 +217,7 @@ function adoptAlarmResumeState(state) {
     }
   }
   organizeStatus.textContent = `Alarm resume — ${state.remaining} tabs queued…`;
+  setOrganizeProgressVisible(true);
   return true;
 }
 
@@ -378,6 +400,7 @@ confirmBtn?.addEventListener('click', async () => {
   organizePhase = 'confirming';
   setBusy(true);
   organizeStatus.textContent = 'Organizing…';
+  setOrganizeProgressVisible(true);
 
   // FIRST await must be permissions.request to preserve the click user gesture.
   // Always request (not gated on stale hasApiKey): covers key/provider saved after preview.
@@ -467,10 +490,18 @@ confirmBtn?.addEventListener('click', async () => {
   }
   hidePreview();
   organizePhase = 'idle';
+  setOrganizeProgressVisible(false);
   const topics = res.logical?.length ?? 0;
   const applied = res.physical?.applied ?? 0;
-  organizeStatus.textContent = `Done — ${topics} logical topics, ${applied} physical groups, ${res.classified ?? 0} classified.`;
+  const reclaimed = Number(res.merge?.reclaimed) || 0;
+  const merged =
+    res.merge?.targetWindowId != null
+      ? ` merged to one window`
+      : '';
+  const stacked = reclaimed > 0 ? `, ${reclaimed} stacked` : '';
+  organizeStatus.textContent = `Done — ${topics} topics, ${applied} groups${merged}${stacked}, ${res.classified ?? 0} classified.`;
   renderLogicalTopics(res.logical || []);
+  if (reclaimed > 0) refreshStacks();
 });
 
 onBackgroundBroadcast((message) => {
@@ -541,6 +572,12 @@ onBackgroundBroadcast((message) => {
   if (organizePhase === 'cancelling') return;
   if (typeof message.message === 'string') {
     organizeStatus.textContent = message.message;
+  }
+  if (message.phase && message.phase !== 'done' && message.phase !== 'cancelled') {
+    setOrganizeProgressVisible(true);
+  }
+  if (message.phase === 'done' || message.phase === 'cancelled') {
+    setOrganizeProgressVisible(false);
   }
 });
 
@@ -861,7 +898,7 @@ async function refreshStacks() {
 
   if (!stacks.length) {
     list.innerHTML =
-      '<li class="sp-muted">No stacked tabs yet — reclaim runs when open tabs exceed maxOpenTabs.</li>';
+      '<li class="sp-muted">No stacked tabs yet — excess from Organize (and auto-reclaim) lands here.</li>';
     return;
   }
   list.innerHTML = stacks

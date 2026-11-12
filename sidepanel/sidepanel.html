@@ -4,13 +4,24 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Tab Caption</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,560;9..144,700&family=Figtree:wght@400;550;650;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
+    <div class="sp-atmosphere" aria-hidden="true"></div>
+
     <header class="sp-header">
       <div class="sp-brand">
         <span class="sp-mark" aria-hidden="true"></span>
-        <h1>Tab Caption</h1>
+        <div class="sp-brand-text">
+          <p class="sp-product">Tab Caption</p>
+          <p class="sp-tagline">Topics on demand. One window when you organize.</p>
+        </div>
       </div>
       <nav class="sp-nav" aria-label="Panel views">
         <button type="button" id="btn-view-main" class="sp-nav-btn is-active" data-view="main">
@@ -23,22 +34,25 @@
     </header>
 
     <main id="view-main" class="sp-view is-active">
-      <section class="sp-section" aria-labelledby="organize-heading">
-        <h2 id="organize-heading">Organize</h2>
-        <p class="sp-help">
-          On-demand topic grouping. LLM runs only when you confirm — never always-on.
+      <section class="sp-hero" aria-labelledby="organize-heading">
+        <h2 id="organize-heading" class="sp-hero-title">Organize</h2>
+        <p class="sp-hero-lede">
+          Classify tabs, keep the newest open, merge into one window — LLM only after you confirm.
         </p>
-        <div class="sp-row">
+        <div class="sp-hero-controls">
           <label class="sp-label" for="group-scope">Scope</label>
           <select id="group-scope" title="All windows or current window">
-            <option value="all">All windows</option>
-            <option value="current">Current window</option>
+            <option value="all">All windows → single window</option>
+            <option value="current">Current window only</option>
           </select>
         </div>
-        <button type="button" id="btn-organize" class="sp-cta">Organize tabs</button>
+        <button type="button" id="btn-organize" class="sp-cta sp-cta-hero">Organize tabs</button>
         <p id="organize-status" class="sp-status" role="status">
           Preview fields, then confirm before any real classify call.
         </p>
+        <div class="sp-progress-track" id="organize-progress-track" hidden>
+          <div class="sp-progress-bar" id="organize-progress-bar"></div>
+        </div>
 
         <div id="organize-preview" class="sp-preview-panel" hidden>
           <h3 class="sp-subhead">Privacy preview</h3>
@@ -55,29 +69,27 @@
       </section>
 
       <section class="sp-section" aria-labelledby="topics-heading">
-        <h2 id="topics-heading">Logical topics</h2>
-        <p class="sp-help">Cross-window topics from the last Organize (physical groups stay per-window).</p>
-        <ul id="topics-list" class="sp-list">
+        <h2 id="topics-heading">Topics</h2>
+        <p class="sp-help">From the last Organize — physical groups live in the merged window.</p>
+        <ul id="topics-list" class="sp-list sp-appear">
           <li class="sp-muted">No topics yet — run Organize.</li>
         </ul>
       </section>
 
       <section class="sp-section" aria-labelledby="search-heading">
         <h2 id="search-heading">Search</h2>
-        <p class="sp-help">
-          Fuzzy + pinyin over open tabs and Stacks. Use ↑↓ then Enter to activate or recall.
-        </p>
+        <p class="sp-help">Fuzzy + pinyin over open tabs and Stacks. ↑↓ then Enter.</p>
         <label class="sp-sr" for="search-input">Search open tabs and stacks</label>
         <input
           id="search-input"
           type="search"
-          placeholder="Search title, URL, topic (pinyin OK)"
+          placeholder="Title, URL, topic (pinyin OK)"
           autocomplete="off"
           aria-controls="search-results"
           aria-autocomplete="list"
         />
         <p id="search-status" class="sp-status" role="status" hidden></p>
-        <div id="search-results" class="sp-results" aria-live="polite">
+        <div id="search-results" class="sp-results sp-appear" aria-live="polite">
           <p class="sp-muted">Type to search Open tabs and Stacked records.</p>
         </div>
       </section>
@@ -85,30 +97,22 @@
       <section class="sp-section" aria-labelledby="stacks-heading">
         <h2 id="stacks-heading">Stacks</h2>
         <p class="sp-help">
-          Reclaimed tabs from this extension (not browser recently-closed). Search Stacked
-          results call the same recall path.
+          Tabs this extension reclaimed (not browser recently-closed). Recall restores topic groups.
         </p>
         <div id="stacks-overflow" class="sp-overflow" hidden>
           <h3 class="sp-subhead">Stack archive full</h3>
           <p id="stacks-overflow-summary" class="sp-help"></p>
           <div class="sp-row sp-actions">
-            <button type="button" id="btn-stacks-export" class="sp-cta">Export oldest &amp; free space</button>
+            <button type="button" id="btn-stacks-export" class="sp-cta">
+              Export oldest &amp; free space
+            </button>
             <button type="button" id="btn-stacks-discard" class="sp-secondary">Discard oldest</button>
           </div>
         </div>
         <p id="stacks-status" class="sp-status" role="status" hidden></p>
-        <ul id="stacks-list" class="sp-list">
-          <li class="sp-muted">No stacked tabs yet — reclaim runs when open tabs exceed maxOpenTabs.</li>
+        <ul id="stacks-list" class="sp-list sp-appear">
+          <li class="sp-muted">No stacked tabs yet — excess from Organize lands here.</li>
         </ul>
-      </section>
-
-      <section class="sp-section" aria-labelledby="preview-heading">
-        <h2 id="preview-heading">Single-tab field preview</h2>
-        <p class="sp-help">
-          Inspect classify fields for the active tab without starting Organize.
-        </p>
-        <button type="button" id="btn-preview" class="sp-secondary">Preview classify fields</button>
-        <pre id="preview-out" class="sp-pre" hidden></pre>
       </section>
     </main>
 
@@ -116,12 +120,19 @@
       <section class="sp-section" aria-labelledby="settings-heading">
         <h2 id="settings-heading">Settings</h2>
         <p class="sp-help">
-          LLM endpoints, thresholds, and privacy live on the Options page.
+          LLM endpoints, thresholds, and privacy live on the Options page. Organize stays in this
+          panel — Options is settings only.
         </p>
         <a id="link-options" class="sp-link" href="../options/options.html" target="_blank" rel="noopener">
           Open Options
         </a>
-        <p class="sp-muted">In-shell settings mirror can grow here later; Options remains the source of truth for keys.</p>
+      </section>
+
+      <section class="sp-section" aria-labelledby="preview-heading">
+        <h2 id="preview-heading">Field preview</h2>
+        <p class="sp-help">Inspect classify fields for the active tab without starting Organize.</p>
+        <button type="button" id="btn-preview" class="sp-secondary">Preview classify fields</button>
+        <pre id="preview-out" class="sp-pre" hidden></pre>
       </section>
     </main>
 

@@ -1,10 +1,11 @@
 /**
- * On-demand group engine (ADR Phase 2 / §5.2–5.3).
- * LogicalTopicView (cross-window) ≠ physical per-window chrome.tabGroups.
- * Never tabs.move across windows. No auto-group on tab complete.
+ * On-demand group engine (ADR Phase 2 / §5.2–5.3 Decision D).
+ * Classify all eligible tabs (including reclaim candidates) → single-window merge
+ * (cross-window tabs.move allowed) → physical tabGroups by topic.
+ * No auto-group on tab complete.
  *
  * Flow: privacy preview (UI) → quick pass (cache hits) → refine queue (miss/stale)
- * → classify → apply logical views + physical groups. Latest-wins on write.
+ * → classify → reclaim excess → merge kept into one window → apply groups.
  */
 
 import { MSG, TIMEOUTS, TAB_GROUP_ID_NONE } from '../shared/constants.js';
@@ -17,6 +18,7 @@ import {
   groupPlansByWindow,
   colorForTopicKey,
 } from '../shared/physical-groups.js';
+import { isSingleWindowMergeScope } from '../shared/window-merge.js';
 import { mergeTopicResult, heuristicTopicsAreSynonyms } from '../shared/topic-normalize.js';
 import { buildClassifyPayloadPreview, createLlmClient } from '../shared/llm-client.js';
 import { hasEndpointPermission } from '../shared/permissions.js';
@@ -33,6 +35,7 @@ import {
   bumpResumeCount,
 } from '../shared/task-state.js';
 import { canSpendLlmCall } from '../shared/metrics.js';
+import { finalizeSingleWindowOrganize } from './window-merge.js';
 
 /**
  * @typedef {import('../shared/topic-cache.js').TopicCacheLru} TopicCacheLru
@@ -139,7 +142,8 @@ export async function buildGroupPayloadPreview(opts) {
 }
 
 /**
- * Apply physical tabGroups for planned groups — never cross-window move.
+ * Apply physical tabGroups for planned groups.
+ * Tabs must already live in plan.windowId (caller merges first for single-window Organize).
  * @param {import('../shared/physical-groups.js').PhysicalGroupPlan[]} plans
  * @param {{ latestWins?: boolean }} [opts]
  */
@@ -164,7 +168,7 @@ export async function applyPhysicalGroups(plans, opts = {}) {
     for (const plan of windowPlans) {
       if (!plan.tabIds.length) continue;
       try {
-        // Verify tabs still live in this window (never move across)
+        // Verify tabs still live in the plan window (merge step already moved them).
         const live = [];
         for (const tabId of plan.tabIds) {
           try {
@@ -255,6 +259,11 @@ async function emitCheckpoint(onCheckpoint, checkpoint) {
  * @param {() => void | Promise<void>} [opts.onLlmSpend] — persist daily quota immediately per call
  * @param {import('../shared/metrics.js').LocalMetrics} [opts.metrics]
  * @param {number | null} [opts.clientRunId]
+ * @param {import('../shared/stack-records.js').StackRecordStore} [opts.stackStore]
+ * @param {Set<number>} [opts.closingTabIds]
+ * @param {(pending: object | null) => Promise<void> | void} [opts.setOverflowPending]
+ * @param {object | null} [opts.overflowPending]
+ * @param {{ push: (e: object) => object }} [opts.activityLog]
  */
 export async function groupTabsOnDemand(opts) {
   if (!opts.confirmed && !opts.resumeFrom?.confirmed) {
@@ -281,6 +290,7 @@ export async function groupTabsOnDemand(opts) {
   const onLlmSpend = opts.onLlmSpend;
   const metrics = opts.metrics;
   const dailyQuota = Number(config.dailyLlmQuota) || 0;
+  const singleWindowMerge = isSingleWindowMergeScope(config) && scope === 'all';
 
   const startedAt = resumeCp?.startedAt ?? Date.now();
   // Fresh wall-clock budget on resume — SW sleep must not consume the original deadlineAt.
@@ -504,7 +514,8 @@ export async function groupTabsOnDemand(opts) {
       }
     }
 
-    // Apply quick-pass physical groups early for responsiveness
+    // Early physical apply only for legacy per-window scope — single-window
+    // merge waits until reclaim + cross-window move finish.
     {
       const cancelled = checkCancel();
       if (!cancelled.continue) {
@@ -522,7 +533,7 @@ export async function groupTabsOnDemand(opts) {
         return cancelled.result;
       }
     }
-    if (assignments.length) {
+    if (assignments.length && !singleWindowMerge) {
       const quickPlans = planPhysicalGroups(assignments);
       physical = await applyPhysicalGroups(quickPlans);
       broadcastProgress({
@@ -532,6 +543,15 @@ export async function groupTabsOnDemand(opts) {
         total,
         applied: physical.applied,
         message: `Cached groups applied (${physical.applied}). Refining ${refineQueue.length}…`,
+      });
+    } else if (assignments.length && singleWindowMerge) {
+      broadcastProgress({
+        jobId,
+        phase: 'quick-pass-applied',
+        done: assignments.length,
+        total,
+        applied: 0,
+        message: `Cached topics ready (${assignments.length}). Refining ${refineQueue.length}…`,
       });
     }
 
@@ -825,9 +845,63 @@ export async function groupTabsOnDemand(opts) {
   await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.APPLYING, { total }));
   collapseHeuristicSynonyms(assignments, topicRegistry);
 
-  const logical = buildLogicalTopicViews(assignments);
-  const plans = planPhysicalGroups(assignments);
-  physical = await applyPhysicalGroups(plans);
+  /** @type {Record<string, unknown> | null} */
+  let merge = null;
+  let finalAssignments = assignments;
+
+  if (singleWindowMerge) {
+    broadcastProgress({
+      jobId,
+      phase: 'merge',
+      done: assignments.length,
+      total,
+      message: 'Merging into one window (keep top maxOpenTabs by lastAccessed)…',
+    });
+    try {
+      merge = await finalizeSingleWindowOrganize({
+        assignments,
+        config,
+        topicCache,
+        stackStore: opts.stackStore,
+        closingTabIds: opts.closingTabIds,
+        setOverflowPending: opts.setOverflowPending,
+        overflowPending: opts.overflowPending,
+        preferredWindowId:
+          typeof opts.currentWindowId === 'number' ? opts.currentWindowId : null,
+        activityLog: opts.activityLog,
+        onProgress: (payload) => {
+          broadcastProgress({ jobId, done: assignments.length, total, ...payload });
+        },
+      });
+      if (Array.isArray(merge.remappedAssignments) && merge.remappedAssignments.length) {
+        finalAssignments = /** @type {TabTopicAssignment[]} */ (merge.remappedAssignments);
+      }
+      const plans =
+        Array.isArray(merge.plans) && merge.plans.length
+          ? merge.plans
+          : planPhysicalGroups(finalAssignments);
+      physical = await applyPhysicalGroups(plans);
+      if (Array.isArray(merge.errors) && merge.errors.length) {
+        physical = {
+          ...physical,
+          errors: [...(physical.errors || []), ...merge.errors],
+        };
+      }
+    } catch (err) {
+      // Fail-soft: fall back to per-window plans so partial classify is not lost.
+      const plans = planPhysicalGroups(assignments);
+      physical = await applyPhysicalGroups(plans);
+      physical.errors = [
+        ...(physical.errors || []),
+        `single-window merge: ${err?.message || err}`,
+      ];
+    }
+  } else {
+    const plans = planPhysicalGroups(assignments);
+    physical = await applyPhysicalGroups(plans);
+  }
+
+  const logical = buildLogicalTopicViews(finalAssignments);
 
   await persistTopicCache(topicCache);
   await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.DONE, { total }));
@@ -842,7 +916,13 @@ export async function groupTabsOnDemand(opts) {
     classifyErrors,
     llmCallsAttempted,
     resumeCount,
-    message: `Done — ${logical.length} topics, ${physical.applied} window groups.`,
+    reclaimed: merge?.reclaimed ?? 0,
+    targetWindowId: merge?.targetWindowId ?? null,
+    message: singleWindowMerge
+      ? `Done — ${logical.length} topics, ${physical.applied} groups in one window` +
+        (merge?.reclaimed ? `, ${merge.reclaimed} stacked` : '') +
+        '.'
+      : `Done — ${logical.length} topics, ${physical.applied} window groups.`,
   });
 
   return {
@@ -851,8 +931,9 @@ export async function groupTabsOnDemand(opts) {
     jobId,
     scope,
     logical,
-    assignments,
+    assignments: finalAssignments,
     physical,
+    merge,
     classified,
     classifyErrors,
     llmCallsAttempted,

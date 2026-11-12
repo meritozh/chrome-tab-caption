@@ -83,7 +83,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   autoStackEnabled: true,
   dedupeMode: 'auto-close-older',
   reclaimPolicy: 'least-recently-accessed',
-  groupScope: 'cross-window-logical',
+  groupScope: 'single-window-merge',
   contentExtractionEnabled: true,
   topicLabelLocale: 'en',
   topicGranularity: 'fine',
