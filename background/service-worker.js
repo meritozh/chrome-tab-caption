@@ -431,7 +431,7 @@ async function maybeResumeOrganizeFromCheckpoint() {
         latestWinsSource: 'extension-organize-cancelled',
       });
     }
-    scheduleReclaim();
+    scheduleReclaimAfterOrganize(result);
     return result;
   } finally {
     if (activeOrganizeJob?.jobId === jobId) activeOrganizeJob = null;
@@ -580,6 +580,17 @@ async function runDedupePass() {
   } finally {
     dedupeInFlight = null;
   }
+}
+
+/**
+ * After Organize: skip reclaim when single-window merge already applied the
+ * lastAccessed keep-set (otherwise maybeReclaim can steal from that set).
+ * Used by GROUP_TABS and alarm resume.
+ * @param {{ ok?: boolean, merge?: unknown } | null | undefined} result
+ */
+function scheduleReclaimAfterOrganize(result) {
+  if (result?.ok && result?.merge) return;
+  scheduleReclaim();
 }
 
 /**
@@ -866,12 +877,7 @@ function onMessage(message, sender, sendResponse) {
             latestWinsSource: 'extension-organize-cancelled',
           });
         }
-        // Single-window Organize already reclaimed excess by lastAccessed keep-set.
-        // A follow-up maybeReclaim would steal from that keep set when pinned/protected
-        // excess leave open count above maxOpenTabs.
-        if (!(result?.ok && result?.merge)) {
-          scheduleReclaim();
-        }
+        scheduleReclaimAfterOrganize(result);
         sendResponse(result);
         break;
       }
