@@ -66,11 +66,18 @@ const scopeSelect = /** @type {HTMLSelectElement | null} */ (document.getElement
 let pendingPreview = null;
 let organizeBusy = false;
 
+/** @returns {number} unique across side-panel windows */
+function nextOrganizeRunId() {
+  return Date.now() * 1000 + Math.floor(Math.random() * 1000);
+}
+
 /**
  * Generation token — Cancel bumps this so in-flight Confirm / progress cannot update UI.
+ * Must be unique across side-panel instances (windows) so CANCEL_GROUP preemptive
+ * marks do not collide. Never a simple 0-based counter alone.
  * @type {number}
  */
-let organizeRunId = 0;
+let organizeRunId = nextOrganizeRunId();
 /** @type {'idle' | 'preview' | 'confirming' | 'running' | 'cancelling'} */
 let organizePhase = 'idle';
 /** @type {string | null} */
@@ -302,7 +309,7 @@ cancelBtn?.addEventListener('click', async () => {
   const phase = organizePhase;
   const cancelledRunId = organizeRunId;
   // Invalidate any in-flight Confirm handler (permission await or GROUP_TABS).
-  organizeRunId += 1;
+  organizeRunId = nextOrganizeRunId();
 
   if (isPreviewOnlyCancel(phase)) {
     // Only cancel a job this panel knows about — never bare cancelActive (other windows).
@@ -364,7 +371,7 @@ cancelBtn?.addEventListener('click', async () => {
 confirmBtn?.addEventListener('click', async () => {
   if (organizeBusy || !pendingPreview) return;
   const pending = pendingPreview;
-  const runId = (organizeRunId += 1);
+  const runId = (organizeRunId = nextOrganizeRunId());
   lastLlmCallsAttempted = 0;
   lastClassified = 0;
   activeJobId = null;
@@ -476,7 +483,7 @@ onBackgroundBroadcast((message) => {
     // Always refresh Stacks so a cleared overflow gate hides Export/Discard.
     refreshStacks();
     if (pendingPreview) {
-      organizeRunId += 1;
+      organizeRunId = nextOrganizeRunId();
       hidePreview();
       setOrganizeIdle();
       organizeStatus.textContent =

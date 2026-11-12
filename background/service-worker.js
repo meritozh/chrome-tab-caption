@@ -649,12 +649,13 @@ function onMessage(message, sender, sendResponse) {
 
         const cpMem = organizeCheckpoint;
 
-        // Abort only jobs this Cancel explicitly identifies — never bare cancelActive
-        // against another window's in-flight Organize.
+        // Abort ONLY by unique jobId. clientRunId is not unique across side panels
+        // (each starts at its own counter) — it only feeds cancelledClientRunIds for
+        // preemptive cancel before GROUP_TABS registers.
         const matchActive =
           activeOrganizeJob &&
-          ((clientRunId != null && activeOrganizeJob.clientRunId === clientRunId) ||
-            (requestJobId != null && activeOrganizeJob.jobId === requestJobId));
+          requestJobId != null &&
+          activeOrganizeJob.jobId === requestJobId;
 
         let hadActiveJob = false;
         let cancelledJobId = requestJobId;
@@ -665,21 +666,11 @@ function onMessage(message, sender, sendResponse) {
           hadActiveJob = true;
         }
 
-        // Drop pending checkpoint only when it belongs to this Cancel (jobId /
-        // clientRunId match), or when cancelActive clears a pending job with no
-        // unrelated active Organize running.
+        // Drop pending checkpoint only when jobId matches (or we just aborted that job).
         let droppedMemCheckpoint = false;
-        const cpMatchesRequest =
-          cpMem &&
-          ((requestJobId != null && cpMem.jobId === requestJobId) ||
-            (clientRunId != null && cpMem.clientRunId === clientRunId));
-        const cancelActiveClearsIdlePending =
-          message.cancelActive === true &&
-          cpMem &&
-          !activeOrganizeJob &&
-          (requestJobId == null || cpMem.jobId === requestJobId);
-
-        if (cpMatchesRequest || cancelActiveClearsIdlePending || (hadActiveJob && cpMem)) {
+        const cpMatchesJob =
+          cpMem && requestJobId != null && cpMem.jobId === requestJobId;
+        if (cpMatchesJob || (hadActiveJob && cpMem && cpMem.jobId === cancelledJobId)) {
           markOrganizeJobCancelled(cpMem.jobId);
           organizeCheckpoint = null;
           droppedMemCheckpoint = true;
