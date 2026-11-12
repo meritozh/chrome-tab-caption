@@ -276,14 +276,13 @@ cancelBtn?.addEventListener('click', async () => {
   organizeRunId += 1;
 
   if (isPreviewOnlyCancel(phase)) {
-    // If a stale alarm-adopt raced under the preview, still cancel the SW job.
-    if (adoptedAlarmResume && activeJobId) {
-      suppressJob(activeJobId);
-      sendToBackground(MSG.CANCEL_GROUP, {
-        jobId: activeJobId,
-        cancelActive: true,
-      }).catch(() => {});
-    }
+    // Always clear background alarm-resume / pending checkpoint — adopt may have
+    // been blocked while busy/preview, so don't gate on adoptedAlarmResume.
+    if (activeJobId) suppressJob(activeJobId);
+    sendToBackground(MSG.CANCEL_GROUP, {
+      jobId: activeJobId || undefined,
+      cancelActive: true,
+    }).catch(() => {});
     hidePreview();
     setOrganizeIdle();
     lastLlmCallsAttempted = 0;
@@ -293,13 +292,16 @@ cancelBtn?.addEventListener('click', async () => {
   }
 
   if (phase === 'confirming') {
-    // Permission step — no LLM yet; mark this run cancelled in SW in case GROUP_TABS races.
+    // Permission step — cancel client run AND any pending/alarm resume checkpoint.
     hidePreview();
     setOrganizeIdle();
     lastLlmCallsAttempted = 0;
     lastClassified = 0;
     organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
-    sendToBackground(MSG.CANCEL_GROUP, { clientRunId: cancelledRunId }).catch(() => {});
+    sendToBackground(MSG.CANCEL_GROUP, {
+      clientRunId: cancelledRunId,
+      cancelActive: true,
+    }).catch(() => {});
     return;
   }
 

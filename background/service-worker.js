@@ -657,8 +657,16 @@ function onMessage(message, sender, sendResponse) {
         // Sync: mark cancelled + drop in-memory checkpoint BEFORE any await so an
         // overlapping maybeResume cannot keep classifying after Cancel returns.
         if (pendingJobId) markOrganizeJobCancelled(pendingJobId);
-        if (cpMem && (requestJobId == null || cpMem.jobId === requestJobId || message.cancelActive)) {
+        let droppedMemCheckpoint = false;
+        // Any Cancel intent (cancelActive, jobId, or clientRunId) drops the pending
+        // checkpoint in memory — session storage must be cleared too (SW restart).
+        if (
+          cpMem &&
+          (message.cancelActive === true || requestJobId != null || clientRunId != null)
+        ) {
+          markOrganizeJobCancelled(cpMem.jobId);
           organizeCheckpoint = null;
+          droppedMemCheckpoint = true;
         }
 
         const matchActive =
@@ -680,6 +688,7 @@ function onMessage(message, sender, sendResponse) {
 
         const shouldClearPending =
           hadActiveJob ||
+          droppedMemCheckpoint ||
           message.cancelActive === true ||
           (requestJobId != null && (!cpMem || cpMem.jobId === requestJobId));
 
