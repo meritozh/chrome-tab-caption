@@ -122,11 +122,91 @@ function markOrganizeJobCancelled(jobId) {
   }
 }
 
-async function initPanelBehavior() {
+/**
+ * Per-window Side Panel open state (port from the panel, or optimistic open).
+ * Toolbar icon toggles open ↔ close; do not use openPanelOnActionClick-only
+ * because that cannot close the panel.
+ * @type {Map<number, { open: boolean, ports: Set<chrome.runtime.Port> }>}
+ */
+const sidePanelByWindow = new Map();
+
+/**
+ * @param {number} windowId
+ */
+function panelState(windowId) {
+  let state = sidePanelByWindow.get(windowId);
+  if (!state) {
+    state = { open: false, ports: new Set() };
+    sidePanelByWindow.set(windowId, state);
+  }
+  return state;
+}
+
+/**
+ * Close Side Panel for a window by briefly disabling it (MV3 has no sidePanel.close).
+ * @param {number} windowId
+ */
+async function closeSidePanel(windowId) {
   try {
-    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    await chrome.sidePanel.setOptions({ windowId, enabled: false });
+    await chrome.sidePanel.setOptions({
+      windowId,
+      enabled: true,
+      path: 'sidepanel/sidepanel.html',
+    });
+  } catch (err) {
+    console.warn('[tab-caption] closeSidePanel failed', err);
+  }
+  const state = panelState(windowId);
+  state.open = false;
+  state.ports.clear();
+}
+
+/**
+ * Toggle Side Panel for the window that owns `tab`.
+ * @param {chrome.tabs.Tab} tab
+ */
+async function toggleSidePanelForTab(tab) {
+  const windowId = typeof tab?.windowId === 'number' ? tab.windowId : null;
+  if (windowId == null) return;
+  const state = panelState(windowId);
+  if (state.open || state.ports.size > 0) {
+    await closeSidePanel(windowId);
+    return;
+  }
+  try {
+    await chrome.sidePanel.setOptions({
+      windowId,
+      enabled: true,
+      path: 'sidepanel/sidepanel.html',
+    });
+    await chrome.sidePanel.open({ windowId });
+    state.open = true;
+  } catch (err) {
+    console.warn('[tab-caption] openSidePanel failed', err);
+    state.open = false;
+  }
+}
+
+/** Guard — onInstalled/onStartup/cold-start must not stack action.onClicked handlers. */
+let panelBehaviorInitialized = false;
+
+async function initPanelBehavior() {
+  // Manual toggle via action.onClicked — openPanelOnActionClick cannot close.
+  try {
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
   } catch (err) {
     console.warn('[tab-caption] setPanelBehavior failed', err);
+  }
+  if (panelBehaviorInitialized) return;
+  panelBehaviorInitialized = true;
+  try {
+    chrome.action.onClicked.addListener((tab) => {
+      void toggleSidePanelForTab(tab);
+    });
+  } catch (err) {
+    panelBehaviorInitialized = false;
+    console.warn('[tab-caption] action.onClicked failed', err);
   }
 }
 
@@ -232,6 +312,11 @@ async function runOrganizeJob(opts) {
   const result = await groupTabsOnDemand({
     ...opts,
     topicCache,
+    stackStore,
+    closingTabIds,
+    overflowPending,
+    setOverflowPending,
+    activityLog,
     metrics: metricsSnapshot,
     onCheckpoint: async (cp) => {
       await persistOrganizeCheckpoint(cp);
@@ -244,9 +329,11 @@ async function runOrganizeJob(opts) {
     },
   });
   if (result?.ok) {
+    const reclaimed = Number(result?.merge?.reclaimed) || 0;
     localMetrics = await bumpMetrics({
       organizeRuns: 1,
       classifyErrors: Number(result.classifyErrors) || 0,
+      ...(reclaimed > 0 ? { reclaimCount: reclaimed } : {}),
     });
   }
   // Drop resumable checkpoint only for *this* job — a superseded cancel must not
@@ -344,7 +431,7 @@ async function maybeResumeOrganizeFromCheckpoint() {
         latestWinsSource: 'extension-organize-cancelled',
       });
     }
-    scheduleReclaim();
+    scheduleReclaimAfterOrganize(result);
     return result;
   } finally {
     if (activeOrganizeJob?.jobId === jobId) activeOrganizeJob = null;
@@ -493,6 +580,17 @@ async function runDedupePass() {
   } finally {
     dedupeInFlight = null;
   }
+}
+
+/**
+ * After Organize: skip reclaim when single-window merge already applied the
+ * lastAccessed keep-set (otherwise maybeReclaim can steal from that set).
+ * Used by GROUP_TABS and alarm resume.
+ * @param {{ ok?: boolean, merge?: unknown } | null | undefined} result
+ */
+function scheduleReclaimAfterOrganize(result) {
+  if (result?.ok && result?.merge) return;
+  scheduleReclaim();
 }
 
 /**
@@ -779,7 +877,7 @@ function onMessage(message, sender, sendResponse) {
             latestWinsSource: 'extension-organize-cancelled',
           });
         }
-        scheduleReclaim();
+        scheduleReclaimAfterOrganize(result);
         sendResponse(result);
         break;
       }
@@ -835,6 +933,7 @@ function onMessage(message, sender, sendResponse) {
         const windowId = await resolveCurrentWindowId(message, sender);
         const result = await recallStack(stackId, {
           stackStore,
+          topicCache,
           windowId,
         });
         sendResponse(result);
@@ -933,6 +1032,40 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.runtime.onMessage.addListener(onMessage);
+
+// Side Panel presence — long-lived port so toolbar click can toggle close.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'side-panel') return;
+  let windowId =
+    typeof port.sender?.tab?.windowId === 'number' ? port.sender.tab.windowId : null;
+
+  const register = (id) => {
+    if (typeof id !== 'number') return;
+    windowId = id;
+    const state = panelState(id);
+    state.open = true;
+    state.ports.add(port);
+  };
+
+  if (windowId != null) register(windowId);
+
+  port.onMessage.addListener((msg) => {
+    if (msg && msg.type === 'SIDE_PANEL_HELLO' && typeof msg.windowId === 'number') {
+      register(msg.windowId);
+    }
+  });
+
+  port.onDisconnect.addListener(() => {
+    if (typeof windowId !== 'number') return;
+    const state = sidePanelByWindow.get(windowId);
+    if (!state) return;
+    state.ports.delete(port);
+    if (state.ports.size === 0) {
+      state.open = false;
+    }
+  });
+});
+
 
 // Cache sync on URL/title updates — metadata only, never LLM / never auto-group.
 // URL commits also schedule cross-window auto-dedupe (Phase 5).

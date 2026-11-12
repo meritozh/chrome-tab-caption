@@ -16,7 +16,7 @@ No install-time `host_permissions`. No always-on `content_scripts`. Side Panel a
 |------------|---------------|
 | **tabs** | Read open tab titles and URLs across windows so the user can search, group, dedupe, and reclaim tabs. Used only for tab-management features; not sold or sent to developer servers. |
 | **tabGroups** | Create and update Chrome tab groups to match topics the user requested after on-demand classification. |
-| **windows** | Enumerate windows so logical topics, dedupe, and Stacks can work across multiple Chrome windows. |
+| **windows** | Enumerate windows for Organize single-window merge, cross-window dedupe, and Stacks. |
 | **storage** | Persist settings (LLM endpoint, thresholds), topic cache, Stacks records, and local metrics in `chrome.storage.local`. API keys stay local; nothing is synced to developer infrastructure. |
 | **alarms** | Schedule deferred reclaim / maintenance and resume interrupted Organize jobs while the MV3 service worker may sleep. |
 | **sidePanel** | Primary UI: open the Side Panel from the action icon for organize, search, and Stacks. |

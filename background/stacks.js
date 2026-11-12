@@ -370,10 +370,12 @@ export async function resolveFocusedActiveTabId(tabs, tabsApi, windowsApi) {
 }
 
 /**
- * Recall a stacked tab: create URL + restore group metadata; remove StackRecord.
+ * Recall a stacked tab: create URL + restore group from StackRecord / topic cache.
+ * Prefers the caller's window (single-window Organize end state).
  * @param {string} stackId
  * @param {object} opts
  * @param {StackRecordStore} opts.stackStore
+ * @param {TopicCacheLru} [opts.topicCache]
  * @param {number} [opts.windowId]
  * @param {typeof chrome.tabs} [opts.tabsApi]
  */
@@ -398,6 +400,7 @@ export async function recallStack(stackId, opts = {}) {
 
   /** @type {chrome.tabs.CreateProperties} */
   const createProps = { url: record.url, active: true };
+  // Prefer live target window (single-window merge) over stale windowIdHint.
   if (typeof opts.windowId === 'number') {
     createProps.windowId = opts.windowId;
   } else if (typeof record.windowIdHint === 'number') {
@@ -428,13 +431,32 @@ export async function recallStack(stackId, opts = {}) {
         ? opts.windowId
         : undefined;
 
+  // Topic cache wins for group merge when StackRecord metadata is thin (ADR §5.6).
+  let cacheMeta = {};
+  if (opts.topicCache) {
+    try {
+      cacheMeta = await resolveStackMetadata(
+        { url: record.url, title: record.title || record.url, groupId: -1 },
+        opts.topicCache,
+      );
+    } catch {
+      cacheMeta = {};
+    }
+  }
+
+  const topicKey = record.topicKey || cacheMeta.topicKey;
+  const topicLabel = record.topicLabel || cacheMeta.topicLabel || topicKey;
+  const groupTitle = record.groupTitle || topicLabel || cacheMeta.groupTitle;
+  const groupColor =
+    record.groupColor || cacheMeta.groupColor || (topicKey ? colorForTopicKey(topicKey) : undefined);
+
   let groupRestore = { restored: false };
   if (typeof tab.id === 'number' && typeof windowId === 'number') {
     groupRestore = await restoreGroupMetadata(tab.id, windowId, {
-      groupTitle: record.groupTitle,
-      groupColor: record.groupColor,
-      topicKey: record.topicKey,
-      topicLabel: record.topicLabel,
+      groupTitle,
+      groupColor,
+      topicKey,
+      topicLabel,
     });
   }
 

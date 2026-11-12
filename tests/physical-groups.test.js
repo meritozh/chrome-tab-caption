@@ -20,7 +20,7 @@ describe('physical / logical group helpers', () => {
     assert.deepEqual(win10news.tabIds, [1, 2]);
   });
 
-  it('builds cross-window logical views without merging windows physically', () => {
+  it('builds logical views that can span windows before merge remaps', () => {
     const logical = buildLogicalTopicViews([
       { tabId: 1, windowId: 10, topicKey: 'news', topicLabel: 'News' },
       { tabId: 3, windowId: 11, topicKey: 'news', topicLabel: 'News' },

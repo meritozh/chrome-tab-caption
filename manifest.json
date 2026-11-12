@@ -11,12 +11,15 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_title": "Open Tab Caption Side Panel",
+    "default_title": "Toggle Tab Caption Side Panel",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
       "48": "icons/icon48.png"
     }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com;"
   },
   "background": {
     "service_worker": "background/service-worker.js",
@@ -41,7 +44,7 @@
   ],
   "commands": {
     "_execute_action": {
-      "description": "Open the Side Panel"
+      "description": "Toggle the Side Panel"
     }
   }
 }

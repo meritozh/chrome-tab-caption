@@ -72,3 +72,12 @@ describe('apiKey wipe guards', () => {
     assert.equal(afterReal.apiKey, 'sk-updated');
   });
 });
+
+describe('groupScope migration', () => {
+  it('coerces legacy cross-window-logical to single-window-merge', async () => {
+    const { mergeConfig } = await import('../shared/config.js');
+    const cfg = mergeConfig({ groupScope: 'cross-window-logical', maxOpenTabs: 40 });
+    assert.equal(cfg.groupScope, 'single-window-merge');
+    assert.equal(cfg.maxOpenTabs, 40);
+  });
+});
