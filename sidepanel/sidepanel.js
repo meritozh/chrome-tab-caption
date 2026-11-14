@@ -142,6 +142,7 @@ function formatProgressMessage(message) {
   if (phase === 'done') return { key: 'progress.done', params: null };
   if (phase === 'cancelled') return { key: 'progress.cancelled', params: null };
   if (phase === 'error') return { key: 'progress.error', params: null };
+  if (phase === 'timeout') return { key: 'organize.stacksPaused', params: null };
   if (typeof message.message === 'string' && message.message) {
     return { raw: message.message };
   }
@@ -383,7 +384,8 @@ function endAdoptedAlarmResumeUi() {
     key === 'organize.reorganizing' ||
     key === 'organize.cancelling'
   ) {
-    setOrganizeStatus('organize.ended');
+    // Alarm resume that ends without Done never applied groups — not a success.
+    setOrganizeStatus('organize.incomplete');
   }
   setOrganizeIdle();
   sendToBackground(MSG.GET_LOGICAL_TOPICS)
@@ -681,11 +683,11 @@ async function startOrganizeJob(mode = 'organize') {
           : { key: 'organize.permissionRetry', params: null },
       );
     } else if (res?.timeout || res?.stacksPending) {
-      // Partial apply kept; alarm will resume remaining stack reclassify.
+      // Merge not applied yet; alarm will resume remaining stack reclassify.
       setOrganizeStatus(
         res.error
           ? { raw: String(res.error) }
-          : { key: 'organize.ended', params: null },
+          : { key: 'organize.stacksPaused', params: null },
       );
       if (Array.isArray(res.logical) && res.logical.length) {
         renderLogicalTopics(res.logical);

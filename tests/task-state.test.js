@@ -37,22 +37,22 @@ describe('organize task state machine', () => {
       jobId: 'reorg-1',
       reorganize: true,
       stacksDone: false,
-      stackIndex: 0,
+      processedStackIds: [],
     });
     assert.equal(cp.reorganize, true);
     assert.equal(cp.clearCache, true);
     assert.equal(cp.bypassCache, true);
     assert.equal(cp.reclassifyStacks, true);
-    assert.equal(cp.stackIndex, 0);
+    assert.deepEqual(cp.processedStackIds, []);
     assert.equal(hasPendingStackReclassify(cp), true);
     const advanced = advancePhase(cp, JOB_PHASES.REFINE, {
       stacksDone: true,
-      stackIndex: 4,
+      processedStackIds: ['s1', 's2'],
     });
     assert.equal(advanced.reorganize, true);
     assert.equal(advanced.reclassifyStacks, true);
     assert.equal(advanced.stacksDone, true);
-    assert.equal(advanced.stackIndex, 4);
+    assert.deepEqual(advanced.processedStackIds, ['s1', 's2']);
     assert.equal(hasPendingStackReclassify(advanced), false);
   });
 
@@ -64,30 +64,30 @@ describe('organize task state machine', () => {
       refineQueue: [],
       refineIndex: 0,
       stacksDone: false,
-      stackIndex: 3,
+      processedStackIds: ['a', 'b'],
       resumeCount: 1,
     });
     const summary = summarizeJobState(cp);
     assert.equal(summary.remaining, 0);
     assert.equal(summary.stacksPending, true);
-    assert.equal(summary.stackIndex, 3);
+    assert.deepEqual(summary.processedStackIds, ['a', 'b']);
     assert.equal(summary.resumable, true);
     assert.equal(summary.alarmResume, true);
   });
 
-  it('advances stackIndex cursor without marking stacksDone', () => {
+  it('advances processedStackIds without marking stacksDone', () => {
     const cp = createOrganizeCheckpoint({
       jobId: 'reorg-cursor',
       phase: JOB_PHASES.REFINE,
       reorganize: true,
-      stackIndex: 0,
+      processedStackIds: [],
       stacksDone: false,
     });
     const mid = advancePhase(cp, JOB_PHASES.INTERRUPTED, {
-      stackIndex: 2,
+      processedStackIds: ['s1', 's2'],
       stacksDone: false,
     });
-    assert.equal(mid.stackIndex, 2);
+    assert.deepEqual(mid.processedStackIds, ['s1', 's2']);
     assert.equal(mid.stacksDone, false);
     assert.equal(hasPendingStackReclassify(mid), true);
   });

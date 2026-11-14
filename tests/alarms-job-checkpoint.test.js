@@ -17,6 +17,7 @@ import {
   interruptOrganizeCheckpoint,
   shouldResumeCheckpoint,
   remainingRefineItems,
+  ORGANIZE_RESUME_MAX_AGE_MS,
 } from '../background/job-checkpoint.js';
 import { SESSION_KEYS } from '../shared/constants.js';
 
@@ -143,10 +144,10 @@ describe('organize checkpoint persistence', () => {
       ],
       refineIndex: 1, // all tabs classified
       stacksDone: false,
-      stackIndex: 2,
+      processedStackIds: ['s1', 's2'],
     });
     assert.equal(remainingRefineItems(stacksPending).length, 0);
-    assert.equal(stacksPending.stackIndex, 2);
+    assert.deepEqual(stacksPending.processedStackIds, ['s1', 's2']);
     assert.equal(shouldResumeCheckpoint(stacksPending), true);
 
     const stacksDone = createOrganizeCheckpoint({
@@ -154,5 +155,26 @@ describe('organize checkpoint persistence', () => {
       stacksDone: true,
     });
     assert.equal(shouldResumeCheckpoint(stacksDone), false);
+  });
+
+  it('keeps stacks-pending resume alive via updatedAt despite old startedAt', () => {
+    const now = Date.now();
+    const staleStart = createOrganizeCheckpoint({
+      jobId: 'reorg-long',
+      phase: JOB_PHASES.INTERRUPTED,
+      reorganize: true,
+      refineQueue: [],
+      stacksDone: false,
+      processedStackIds: ['s1'],
+      startedAt: now - ORGANIZE_RESUME_MAX_AGE_MS - 60_000,
+      updatedAt: now - 5_000,
+    });
+    assert.equal(shouldResumeCheckpoint(staleStart, now), true);
+
+    const idleTooLong = createOrganizeCheckpoint({
+      ...staleStart,
+      updatedAt: now - ORGANIZE_RESUME_MAX_AGE_MS - 1,
+    });
+    assert.equal(shouldResumeCheckpoint(idleTooLong, now), false);
   });
 });

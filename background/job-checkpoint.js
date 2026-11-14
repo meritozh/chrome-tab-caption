@@ -60,13 +60,21 @@ export async function interruptOrganizeCheckpoint(storage = globalThis.chrome?.s
   return next;
 }
 
+/** Max idle time since last checkpoint progress before abandoning resume. */
+export const ORGANIZE_RESUME_MAX_AGE_MS = 30 * 60_000;
+
 /**
  * Whether a stored checkpoint should be resumed by alarm / SW start.
  * Resume when refine tabs remain **or** Reorganize still needs stack reclassify
  * (`reclassifyStacks && !stacksDone`) — even if the refine queue is empty.
+ *
+ * Age uses `updatedAt` while stacks are still pending (merge not applied) so a
+ * long Reorganize with alarm gaps does not drop unapplied grouping. Idle
+ * checkpoints with no progress for 30 minutes are still abandoned.
  * @param {import('../shared/task-state.js').OrganizeCheckpoint | null | undefined} checkpoint
+ * @param {number} [nowMs]
  */
-export function shouldResumeCheckpoint(checkpoint) {
+export function shouldResumeCheckpoint(checkpoint, nowMs = Date.now()) {
   if (!isOrganizeCheckpoint(checkpoint)) return false;
   if (!isResumablePhase(checkpoint.phase) && checkpoint.phase !== 'interrupted') {
     return false;
@@ -75,9 +83,12 @@ export function shouldResumeCheckpoint(checkpoint) {
   const refineLeft = remainingRefineItems(checkpoint).length > 0;
   const stacksLeft = hasPendingStackReclassify(checkpoint);
   if (!refineLeft && !stacksLeft) return false;
-  // Stale deadline — still resume once so partial apply can finish, unless ancient.
-  const ageMs = Date.now() - (checkpoint.startedAt || 0);
-  if (ageMs > 30 * 60_000) return false;
+  // Prefer updatedAt while stacks pending — progress checkpoints keep the window alive.
+  // Otherwise fall back to startedAt (original job age for refine-only resumes).
+  const ageRef = stacksLeft
+    ? Number(checkpoint.updatedAt) || Number(checkpoint.startedAt) || 0
+    : Number(checkpoint.startedAt) || 0;
+  if (nowMs - ageRef > ORGANIZE_RESUME_MAX_AGE_MS) return false;
   return true;
 }
 

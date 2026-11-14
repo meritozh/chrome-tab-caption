@@ -43,6 +43,10 @@ export const MESSAGES = {
     'organize.reorganizing': 'Reorganizing…',
     'organize.cancelling': 'Cancelling…',
     'organize.ended': 'Organize ended.',
+    'organize.incomplete':
+      'Organize stopped before grouping finished. Run Organize again if needed.',
+    'organize.stacksPaused':
+      'Paused — stack reclassify will resume automatically…',
     'organize.done':
       'Done — {topics} topics, {applied} groups{merged}{stacked}, {classified} classified.',
     'organize.merged': ' merged to one window',
@@ -149,6 +153,8 @@ export const MESSAGES = {
     'organize.reorganizing': '正在重新整理…',
     'organize.cancelling': '正在取消…',
     'organize.ended': '整理已结束。',
+    'organize.incomplete': '整理在分组完成前已停止。如需继续请再次运行整理。',
+    'organize.stacksPaused': '已暂停 — 堆栈重新分类将自动继续…',
     'organize.done':
       '完成 — {topics} 个主题，{applied} 个分组{merged}{stacked}，已分类 {classified}。',
     'organize.merged': '，已合并到一个窗口',

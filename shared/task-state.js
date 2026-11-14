@@ -76,9 +76,28 @@ const TERMINAL = new Set([
  *   bypassCache: boolean,
  *   reclassifyStacks: boolean,
  *   stacksDone: boolean,
- *   stackIndex: number,
+ *   processedStackIds: string[],
  * }} OrganizeCheckpoint
  */
+
+/**
+ * Normalize processed stack id list (stable resume cursor — not a list index).
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+export function normalizeProcessedStackIds(value) {
+  if (!Array.isArray(value)) return [];
+  /** @type {string[]} */
+  const out = [];
+  const seen = new Set();
+  for (const raw of value) {
+    const id = typeof raw === 'string' ? raw.trim() : '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
 
 /**
  * @param {Partial<OrganizeCheckpoint> & { jobId: string }} partial
@@ -111,8 +130,8 @@ export function createOrganizeCheckpoint(partial) {
     bypassCache: partial.bypassCache === true || reorganize,
     reclassifyStacks: partial.reclassifyStacks === true || reorganize,
     stacksDone: partial.stacksDone === true,
-    /** Next stack index to process (resume cursor for reclassifyAllStacks). */
-    stackIndex: Math.max(0, Number(partial.stackIndex) || 0),
+    /** Stack record ids already reclassified this job (stable across list mutations). */
+    processedStackIds: normalizeProcessedStackIds(partial.processedStackIds),
   };
 }
 
@@ -260,7 +279,7 @@ export function summarizeJobState(checkpoint) {
     resumable:
       isResumablePhase(checkpoint.phase) && (remaining > 0 || stacksPending),
     stacksPending,
-    stackIndex: Math.max(0, Number(checkpoint.stackIndex) || 0),
+    processedStackIds: normalizeProcessedStackIds(checkpoint.processedStackIds),
     /**
      * True only for alarm/SW-sleep continuation — not a normal in-progress Organize.
      * Side Panel must adopt UI only when this is set (avoid hijacking an in-flight Organize).
