@@ -1,14 +1,13 @@
 :root {
-  --bg: #f5f8f6;
-  --ink: #14201b;
-  --muted: #5b6b64;
-  --brand: #0f766e;
-  --brand-ink: #f0fdfa;
-  --line: #c9d6cf;
-  --panel: rgba(255, 255, 255, 0.72);
-  --radius: 10px;
-  --font: "IBM Plex Sans", "Segoe UI", sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --bg: #f9f9fb;
+  --ink: #1e1f24;
+  --muted: #62636c;
+  --brand: #3e63dd;
+  --brand-ink: #fff;
+  --line: #d9d9e0;
+  --panel: #ffffff;
+  --radius: 8px;
+  --font: "Plus Jakarta Sans", "Segoe UI", sans-serif;
 }
 
 * {
@@ -21,15 +20,22 @@ body {
   color: var(--ink);
   font: 15px/1.5 var(--font);
   background:
-    linear-gradient(165deg, #dff3ec 0%, transparent 42%),
-    linear-gradient(15deg, #eef3ef 0%, var(--bg) 55%);
+    radial-gradient(120% 80% at 0% -20%, color-mix(in srgb, var(--brand) 12%, transparent) 0%, transparent 55%),
+    linear-gradient(180deg, #fcfcfd 0%, var(--bg) 100%);
 }
 
-.opt-header,
-.opt-form {
-  max-width: 42rem;
-  margin: 0 auto;
-  padding: 1.5rem 1.25rem;
+.opt-redirect {
+  display: grid;
+  place-items: center;
+  padding: 2rem 1.25rem;
+}
+
+.opt-redirect-card {
+  width: min(28rem, 100%);
+  padding: 1.5rem 1.35rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
 }
 
 .opt-eyebrow {
@@ -38,89 +44,19 @@ body {
   letter-spacing: 0.04em;
   color: var(--brand);
   font-weight: 650;
+  font-size: 0.85rem;
 }
 
-.opt-header h1 {
-  margin: 0.2rem 0 0.5rem;
-  font-size: 1.85rem;
+.opt-redirect-card h1 {
+  margin: 0.35rem 0 0.55rem;
+  font-size: 1.45rem;
   letter-spacing: -0.03em;
 }
 
 .opt-lede {
   margin: 0;
   color: var(--muted);
-}
-
-.opt-form fieldset {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel);
-  margin: 0 0 1rem;
-  padding: 1rem 1rem 1.1rem;
-}
-
-.opt-form legend {
-  padding: 0 0.35rem;
-  font-weight: 650;
-}
-
-.opt-form label {
-  display: block;
-  margin-top: 0.75rem;
-  font-size: 0.9rem;
-}
-
-.opt-form input,
-.opt-form select {
-  display: block;
-  width: 100%;
-  margin-top: 0.3rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0.5rem 0.65rem;
-  font: inherit;
-  background: #fff;
-}
-
-.opt-check {
-  display: flex !important;
-  align-items: flex-start;
-  gap: 0.5rem;
-}
-
-.opt-check input {
-  width: auto;
-  margin-top: 0.25rem;
-}
-
-.opt-help {
-  margin: 0.5rem 0 0;
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
-.opt-preview-fields {
-  margin-top: 0.85rem;
-  padding: 0.85rem;
-  border-radius: 8px;
-  background: #10231f;
-  color: #ccfbf1;
-}
-
-.opt-preview-fields h2 {
-  margin: 0 0 0.4rem;
-  font-size: 0.95rem;
-}
-
-.opt-preview-fields ul {
-  margin: 0;
-  padding-left: 1.1rem;
-}
-
-.opt-preview-fields code,
-.opt-lede code {
-  font-family: var(--mono);
-  font-size: 0.86em;
+  font-size: 0.92rem;
 }
 
 .opt-actions {
@@ -128,29 +64,19 @@ body {
   align-items: center;
   gap: 0.75rem;
   flex-wrap: wrap;
-  margin-top: 0.85rem;
+  margin-top: 1.1rem;
 }
 
-.opt-primary,
-.opt-secondary {
+.opt-primary {
   appearance: none;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 0.55rem 1rem;
   font: inherit;
   font-weight: 650;
   cursor: pointer;
-}
-
-.opt-primary {
   background: var(--brand);
   color: var(--brand-ink);
-}
-
-.opt-secondary {
-  background: #e4efe9;
-  color: var(--ink);
-  border: 1px solid var(--line);
 }
 
 .opt-status {

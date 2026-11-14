@@ -9,10 +9,10 @@ On-demand LLM topic grouping for Chrome tabs: organize when you ask, cache what 
 | | 中文 | English |
 |---|---|---|
 | **Organize** | Side Panel 一键整理：全量分类后按 `lastAccessed` 保留前 `maxOpenTabs`，**合并为单窗**并建物理 `tabGroups`；超额进 Stacks（仍写 topic cache） | On-demand classify → keep newest `maxOpenTabs` → **merge to one window** + topic groups; excess → Stacks (topics still cached) |
-| **Side Panel** | 工具栏图标 **开关** Side Panel；Organize 仅在面板内；Options 只做设置 | Toolbar icon **toggles** the panel; Organize only in-panel; Options = settings |
-| **Search** | 内存模糊搜索（拼音/首字母）+ 按最近使用排序；Open / Stacked 分区 | In-memory fuzzy + pinyin/initials, recency-first; Open / Stacked results |
+| **Side Panel** | 工具栏图标 **开关** Side Panel；Organize 仅在面板内；**设置**页为配置表（Options 仅跳转） | Toolbar icon **toggles** the panel; Organize in-panel; **Settings** table owns config (Options redirects) |
+| **Search** | Stacks 上方模糊搜索（拼音/首字母）；堆栈列表过滤 + Open 命中条 | Fuzzy + pinyin above Stacks; filters stack list + open-hit strip |
 | **Cache** | `urlKey` + content hash LRU，避免重复打 LLM | Topic cache so the same page isn’t reclassified |
-| **Privacy** | 自配 endpoint；API key 仅存本地；Options 列出发送字段；Organize 一键直接生效 | Your endpoint, local key, fields listed in Options; Organize applies LLM results immediately |
+| **Privacy** | 自配 endpoint；API key 仅存本地；设置页列出发送字段；Organize 一键直接生效 | Your endpoint, local key, fields listed in Settings; Organize applies LLM results immediately |
 | **Dedupe** | 同规范化 URL（同窗或跨窗）自动关闭较旧副本（保留 active/audible/pinned/最近；跳过未保存） | Auto-close-older for normalized URLs within/across windows |
 | **Stacks** | **Organize / Reorganize** 时超过 `maxOpenTabs` 回收到可搜索归档（日常浏览不自动回收）；召回读 cache/metadata 归组；触及 `stackSize` 先警告再导出/丢弃 | Reclaim past maxOpenTabs **only on Organize/Reorganize** (not while browsing); recall via cache/metadata; overflow warns then export/discard |
 | **Extract** | Organize 时按需抽取主文本（Mozilla Readability + ≤~280 excerpt）；非常驻 content script | On-demand main-text extract (Mozilla Readability + ≤~280 excerpt); no always-on content scripts |
@@ -25,24 +25,24 @@ Product decisions: `docs/decisions-log.md` (Accepted + §10 borrow notes). Store
 1. Chrome → `chrome://extensions` → enable **Developer mode**
 2. **Load unpacked** → this repo root (folder with `manifest.json`)
 3. Click the action icon → **Side Panel** toggles open/close (no popup)
-4. **Options** → set provider / endpoint / API key / model → Save (settings only — Organize is in the panel)
-5. Options → **Dedupe** → leave auto-close-older enabled (default) to collapse same-URL tabs across windows
-6. Options → **Content & cost** → leave extraction on (optional hosts requested on Organize); set `dailyLlmQuota` if you want a UTC-day cap (`0` = unlimited)
-7. Side Panel → **Organize tabs** (All windows) → hosts if needed → LLM classify → groups/Stacks apply immediately
-8. Options → **Local metrics** shows on-device counters (organize / LLM / dedupe / reclaim / alarm resumes)
+4. Side Panel → **Settings** → set provider / endpoint / API key / model → Save (Chrome “Options” only opens this view)
+5. Settings → **Dedupe** → leave auto-close-older enabled (default) to collapse same-URL tabs across windows
+6. Settings → **Content & cost** → leave extraction on (optional hosts requested on Organize); set `dailyLlmQuota` if you want a UTC-day cap (`0` = unlimited)
+7. Side Panel → **Organize tabs** (fixed all windows → single window) → hosts if needed → LLM classify → groups/Stacks apply immediately
+8. Settings → **Local metrics** shows on-device counters (organize / LLM / dedupe / reclaim / alarm resumes)
 
 `TEST_LLM` hits your configured Anthropic/OpenAI Responses endpoint (no mock). Organize requires a working provider + API key — there is no hostname topic fallback. API keys stay in `chrome.storage.local` only — never commit them. If the service worker sleeps mid-Organize, a checkpoint + `chrome.alarms` resume continues the refine queue.
 
 ### Try Search (Side Panel)
 
 1. Open the Side Panel and a few tabs (try a Chinese title for pinyin, e.g. “今日头条”)
-2. In **Search**, type a substring, fuzzy fragment, full pinyin, or initials (`jrtt`)
-3. Results split into **Open** (live tabs) and **Stacked** (this extension’s `stackRecords`)
+2. Under **Stacks**, type a substring, fuzzy fragment, full pinyin, or initials (`jrtt`)
+3. Stacked hits filter the list; open-tab hits appear in a compact strip above it
 4. Use **↑ / ↓** then **Enter** (or click) to focus an open tab or recall a stacked one
 
 ### Try Stacks (Side Panel)
 
-1. Options → set `maxOpenTabs` low (e.g. `3`) for a quick demo → Save
+1. Settings → set `maxOpenTabs` low (e.g. `3`) for a quick demo → Save
 2. Open more tabs than the threshold, then run **Organize** (or **Reorganize**) — excess tabs reclaim into Stacks with topic metadata. Day-to-day browsing does **not** auto-reclaim.
 3. Side Panel → **Stacks** lists reclaimed records; **Recall** restores the URL and group (via cache/metadata)
 4. Search → **Stacked** hits use the same `RECALL_STACK` path

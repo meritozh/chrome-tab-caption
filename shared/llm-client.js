@@ -46,7 +46,7 @@ export const CLASSIFY_PREFER_EXISTING_SYSTEM_SUFFIX =
 
 /** User-facing when provider or API key is missing. */
 export const LLM_CONFIG_REQUIRED_MESSAGE =
-  'LLM is not configured. Set provider and API key in Options before Organize or Test connection.';
+  'LLM is not configured. Set provider and API key in Side Panel → Settings before Organize or Test connection.';
 
 /**
  * Normalize / de-dupe topic labels for the classify prompt (case-insensitive).

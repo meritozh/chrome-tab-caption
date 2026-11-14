@@ -214,7 +214,7 @@ body {
 
 .sp-hero {
   flex: 0 0 auto;
-  padding: 0.85rem 0 0.25rem;
+  padding: 0.55rem 0 0.1rem;
 }
 
 .sp-hero-title {
@@ -225,40 +225,15 @@ body {
   color: var(--ink);
 }
 
-.sp-hero-lede {
-  margin: 0.35rem 0 0.75rem;
-  color: var(--ink-soft);
-  font-size: 0.88rem;
-  max-width: 28rem;
-}
-
-.sp-hero-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.65rem;
-}
-
-.sp-cta-hero {
-  width: 100%;
-  padding: 0.62rem 0.95rem;
-  font-size: 0.94rem;
-}
-
 .sp-section {
   flex: 0 0 auto;
-  margin-top: 0.95rem;
-  padding-top: 0.85rem;
+  margin-top: 0.7rem;
+  padding-top: 0.6rem;
   border-top: 1px solid var(--line);
 }
 
 .sp-section-compact .sp-list {
-  max-height: 5.5rem;
-  overflow: auto;
-}
-
-.sp-section-compact .sp-results {
-  max-height: 7.5rem;
+  max-height: 4.25rem;
   overflow: auto;
 }
 
@@ -267,8 +242,8 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  margin-top: 0.85rem;
-  padding-top: 0.75rem;
+  margin-top: 0.65rem;
+  padding-top: 0.55rem;
   overflow: hidden;
 }
 
@@ -276,11 +251,25 @@ body {
   flex: 0 0 auto;
 }
 
+.sp-stacks-search {
+  margin-top: 0.4rem;
+}
+
+.sp-stacks-search-results {
+  margin-top: 0.35rem;
+  max-height: 7.5rem;
+  overflow: auto;
+}
+
+.sp-stacks-search-results[hidden] {
+  display: none !important;
+}
+
 .sp-stacks-viewport {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  margin-top: 0.35rem;
+  margin-top: 0.4rem;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface);
@@ -307,9 +296,14 @@ body {
 .sp-help,
 .sp-muted,
 .sp-status {
-  margin: 0.2rem 0 0.55rem;
+  margin: 0.15rem 0 0.35rem;
   color: var(--muted);
   font-size: 0.8rem;
+}
+
+.sp-hero .sp-status {
+  margin: 0.25rem 0 0;
+  min-height: 1.15em;
 }
 
 .sp-status.is-running {
@@ -513,6 +507,100 @@ select:disabled {
   border-bottom: 1px solid color-mix(in srgb, var(--accent-9) 40%, transparent);
 }
 
+.sp-settings-section {
+  margin-top: 0.45rem;
+  padding-top: 0.55rem;
+  border-top: none;
+}
+
+.sp-settings-form {
+  margin-top: 0.35rem;
+}
+
+.sp-settings-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.sp-settings-table th,
+.sp-settings-table td {
+  vertical-align: middle;
+  padding: 0.35rem 0.25rem;
+  border-bottom: 1px solid var(--gray-4);
+}
+
+.sp-settings-table th[scope='row'] {
+  width: 38%;
+  text-align: left;
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--muted);
+  padding-right: 0.45rem;
+}
+
+.sp-settings-table td {
+  width: 62%;
+}
+
+.sp-settings-table .sp-settings-group th {
+  padding-top: 0.75rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gray-11);
+  background: transparent;
+}
+
+.sp-settings-table input[type='text'],
+.sp-settings-table input[type='password'],
+.sp-settings-table input[type='url'],
+.sp-settings-table input[type='number'],
+.sp-settings-table select {
+  width: 100%;
+  min-width: 0;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.82rem;
+}
+
+.sp-settings-table input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+}
+
+.sp-settings-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.sp-settings-inline .sp-status {
+  margin: 0;
+  flex: 1 1 8rem;
+}
+
+.sp-settings-fields,
+.sp-settings-metrics {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+}
+
+.sp-settings-fields code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+.sp-settings-actions {
+  margin-top: 0.65rem;
+  margin-bottom: 0.25rem;
+}
+
 .sp-pre {
   margin-top: 0.55rem;
   padding: 0.6rem;
@@ -542,13 +630,20 @@ select:disabled {
 }
 
 .sp-organize-actions {
-  align-items: center;
-  gap: 0.5rem;
-  margin-top: 0.7rem;
+  align-items: stretch;
+  flex-wrap: nowrap;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+  margin-bottom: 0.15rem;
 }
 
-.sp-organize-actions .sp-cta-hero {
-  margin-top: 0;
+.sp-organize-actions .sp-cta,
+.sp-organize-actions .sp-secondary {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
 }
 
 .sp-overflow {

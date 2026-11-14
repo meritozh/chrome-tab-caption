@@ -45,18 +45,8 @@
     <main id="view-main" class="sp-view sp-view-main is-active">
       <section class="sp-hero" aria-labelledby="organize-heading">
         <h2 id="organize-heading" class="sp-hero-title" data-i18n="organize.heading">Organize</h2>
-        <p class="sp-hero-lede" data-i18n="organize.lede">
-          One click classifies tabs, keeps the newest open, and merges into one window.
-        </p>
-        <div class="sp-hero-controls">
-          <label class="sp-label" for="group-scope" data-i18n="organize.scope">Scope</label>
-          <select id="group-scope" title="All windows or current window">
-            <option value="all" data-i18n="organize.scopeAll">All windows → single window</option>
-            <option value="current" data-i18n="organize.scopeCurrent">Current window only</option>
-          </select>
-        </div>
         <div class="sp-row sp-actions sp-organize-actions">
-          <button type="button" id="btn-organize" class="sp-cta sp-cta-hero" data-i18n="organize.btn">
+          <button type="button" id="btn-organize" class="sp-cta" data-i18n="organize.btn">
             Organize tabs
           </button>
           <button
@@ -73,9 +63,7 @@
             Cancel
           </button>
         </div>
-        <p id="organize-status" class="sp-status" role="status">
-          Ready — Organize applies LLM topics immediately (Cancel stops an in-flight job).
-        </p>
+        <p id="organize-status" class="sp-status" role="status">Ready</p>
         <div class="sp-progress-track" id="organize-progress-track" hidden>
           <div class="sp-progress-bar" id="organize-progress-bar"></div>
         </div>
@@ -83,43 +71,14 @@
 
       <section class="sp-section sp-section-compact" aria-labelledby="topics-heading">
         <h2 id="topics-heading" data-i18n="topics.heading">Topics</h2>
-        <p class="sp-help" data-i18n="topics.help">
-          From the last Organize — physical groups live in the merged window.
-        </p>
         <ul id="topics-list" class="sp-list sp-appear">
           <li class="sp-muted" data-i18n="topics.empty">No topics yet — run Organize.</li>
         </ul>
       </section>
 
-      <section class="sp-section sp-section-compact" aria-labelledby="search-heading">
-        <h2 id="search-heading" data-i18n="search.heading">Search</h2>
-        <p class="sp-help" data-i18n="search.help">
-          Fuzzy + pinyin over open tabs and Stacks. ↑↓ then Enter.
-        </p>
-        <label class="sp-sr" for="search-input" data-i18n="search.aria">Search open tabs and stacks</label>
-        <input
-          id="search-input"
-          type="search"
-          data-i18n-placeholder="search.placeholder"
-          placeholder="Title, URL, topic (pinyin OK)"
-          autocomplete="off"
-          aria-controls="search-results"
-          aria-autocomplete="list"
-        />
-        <p id="search-status" class="sp-status" role="status" hidden></p>
-        <div id="search-results" class="sp-results sp-appear" aria-live="polite">
-          <p class="sp-muted" data-i18n="search.emptyPrompt">
-            Type to search Open tabs and Stacked records.
-          </p>
-        </div>
-      </section>
-
       <section class="sp-section sp-stacks-section" aria-labelledby="stacks-heading">
         <div class="sp-stacks-head">
           <h2 id="stacks-heading" data-i18n="stacks.heading">Stacks</h2>
-          <p class="sp-help" data-i18n="stacks.help">
-            Tabs this extension reclaimed (not browser recently-closed). Recall restores topic groups.
-          </p>
           <div id="stacks-overflow" class="sp-overflow" hidden>
             <h3 class="sp-subhead" data-i18n="stacks.overflowTitle">Stack archive full</h3>
             <p id="stacks-overflow-summary" class="sp-help"></p>
@@ -138,6 +97,19 @@
             </div>
           </div>
           <p id="stacks-status" class="sp-status" role="status" hidden></p>
+          <label class="sp-sr" for="search-input" data-i18n="search.aria">Search open tabs and stacks</label>
+          <input
+            id="search-input"
+            class="sp-stacks-search"
+            type="search"
+            data-i18n-placeholder="search.placeholder"
+            placeholder="Title, URL, topic (pinyin OK)"
+            autocomplete="off"
+            aria-controls="search-results"
+            aria-autocomplete="list"
+          />
+          <p id="search-status" class="sp-status" role="status" hidden></p>
+          <div id="search-results" class="sp-results sp-appear sp-stacks-search-results" aria-live="polite" hidden></div>
         </div>
         <div
           id="stacks-viewport"
@@ -152,22 +124,224 @@
     </main>
 
     <main id="view-settings" class="sp-view sp-view-settings" hidden>
-      <section class="sp-section" aria-labelledby="settings-heading">
+      <section class="sp-section sp-settings-section" aria-labelledby="settings-heading">
         <h2 id="settings-heading" data-i18n="settings.heading">Settings</h2>
         <p class="sp-help" data-i18n="settings.help">
-          LLM endpoints, thresholds, and privacy live on the Options page. Organize stays in this
-          panel — Options is settings only.
+          LLM, thresholds, and privacy — saved in this panel (local only).
         </p>
-        <a
-          id="link-options"
-          class="sp-link"
-          href="../options/options.html"
-          target="_blank"
-          rel="noopener"
-          data-i18n="settings.openOptions"
-        >
-          Open Options
-        </a>
+        <form id="settings-form" class="sp-settings-form">
+          <table class="sp-settings-table">
+            <tbody>
+              <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupLlm">LLM</th>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="llmProvider" data-i18n="settings.provider">Provider</label>
+                </th>
+                <td>
+                  <select id="llmProvider" name="llmProvider" required>
+                    <option value="" data-i18n="settings.providerSelect">Select…</option>
+                    <option value="anthropic" data-i18n="settings.providerAnthropic">
+                      Anthropic Messages
+                    </option>
+                    <option value="openai-responses" data-i18n="settings.providerOpenai">
+                      OpenAI Responses-style
+                    </option>
+                  </select>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="endpointBaseUrl" data-i18n="settings.endpoint">Endpoint</label>
+                </th>
+                <td>
+                  <input
+                    id="endpointBaseUrl"
+                    name="endpointBaseUrl"
+                    type="url"
+                    data-i18n-placeholder="settings.endpointPlaceholder"
+                    placeholder="https://api.anthropic.com"
+                    autocomplete="off"
+                  />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="apiKey" data-i18n="settings.apiKey">API key</label>
+                </th>
+                <td>
+                  <input
+                    id="apiKey"
+                    name="apiKey"
+                    type="password"
+                    data-i18n-placeholder="settings.apiKeyPlaceholder"
+                    placeholder="Leave blank to keep existing"
+                    autocomplete="off"
+                  />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="model" data-i18n="settings.model">Model</label>
+                </th>
+                <td>
+                  <input
+                    id="model"
+                    name="model"
+                    type="text"
+                    data-i18n-placeholder="settings.modelPlaceholder"
+                    placeholder="e.g. claude-… or gpt-…"
+                    autocomplete="off"
+                  />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row" data-i18n="settings.testLlm">Test LLM</th>
+                <td>
+                  <div class="sp-settings-inline">
+                    <button
+                      type="button"
+                      id="btn-test-llm"
+                      class="sp-secondary"
+                      data-i18n="settings.testBtn"
+                    >
+                      Test connection
+                    </button>
+                    <span id="test-status" class="sp-status" role="status"></span>
+                  </div>
+                </td>
+              </tr>
+
+              <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupThresholds">
+                  Thresholds
+                </th>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="maxOpenTabs">maxOpenTabs</label>
+                </th>
+                <td>
+                  <input id="maxOpenTabs" name="maxOpenTabs" type="number" min="1" step="1" />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="cacheSize">cacheSize</label>
+                </th>
+                <td>
+                  <input id="cacheSize" name="cacheSize" type="number" min="1" step="1" />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="stackSize">stackSize</label>
+                </th>
+                <td>
+                  <input id="stackSize" name="stackSize" type="number" min="1" step="1" />
+                </td>
+              </tr>
+
+              <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupDedupe">Dedupe</th>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="autoDedupeEnabled" data-i18n="settings.autoDedupe">Auto-dedupe</label>
+                </th>
+                <td>
+                  <input id="autoDedupeEnabled" name="autoDedupeEnabled" type="checkbox" />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="dedupeMode" data-i18n="settings.dedupeMode">Mode</label>
+                </th>
+                <td>
+                  <select id="dedupeMode" name="dedupeMode">
+                    <option value="auto-close-older">auto-close-older</option>
+                  </select>
+                </td>
+              </tr>
+
+              <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupContent">Content &amp; cost</th>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="contentExtractionEnabled" data-i18n="settings.extraction">
+                    Extract excerpt
+                  </label>
+                </th>
+                <td>
+                  <input
+                    id="contentExtractionEnabled"
+                    name="contentExtractionEnabled"
+                    type="checkbox"
+                  />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="dailyLlmQuota">dailyLlmQuota</label>
+                </th>
+                <td>
+                  <input id="dailyLlmQuota" name="dailyLlmQuota" type="number" min="0" step="1" />
+                </td>
+              </tr>
+
+              <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupPrivacy">Privacy</th>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="privacyShowFieldsPreview" data-i18n="settings.privacyFields">
+                    List LLM fields
+                  </label>
+                </th>
+                <td>
+                  <input
+                    id="privacyShowFieldsPreview"
+                    name="privacyShowFieldsPreview"
+                    type="checkbox"
+                    checked
+                    disabled
+                  />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row" data-i18n="settings.fieldsSent">Fields sent</th>
+                <td>
+                  <ul class="sp-settings-fields">
+                    <li><code>url</code></li>
+                    <li><code>title</code></li>
+                    <li><code>snippet</code></li>
+                    <li><code>extractedText</code></li>
+                    <li><code>provider</code> / <code>model</code> / <code>endpointBaseUrl</code></li>
+                  </ul>
+                </td>
+              </tr>
+
+              <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupMetrics">Local metrics</th>
+              </tr>
+              <tr>
+                <th scope="row" data-i18n="settings.metrics">Counters</th>
+                <td>
+                  <ul id="metrics-list" class="sp-settings-metrics" aria-live="polite">
+                    <li class="sp-muted" data-i18n="settings.metricsLoading">Loading…</li>
+                  </ul>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="sp-row sp-actions sp-settings-actions">
+            <button type="submit" class="sp-cta" data-i18n="settings.save">Save</button>
+            <span id="save-status" class="sp-status" role="status"></span>
+          </div>
+        </form>
       </section>
 
       <section class="sp-section" aria-labelledby="preview-heading">
