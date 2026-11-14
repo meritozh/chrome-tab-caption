@@ -28,6 +28,10 @@ import {
   LLM_CONFIG_REQUIRED_MESSAGE,
   normalizeExistingTopics,
 } from '../shared/llm-client.js';
+import {
+  buildSeedCandidateTopics,
+  normalizeSeedTopics,
+} from '../shared/seed-topics.js';
 import { hasEndpointPermission } from '../shared/permissions.js';
 import { capExcerpt, persistTopicCache } from '../shared/topic-cache.js';
 import { extractTabContent } from '../content/extract.js';
@@ -355,18 +359,29 @@ export async function groupTabsOnDemand(opts) {
   let processedStackIds = Array.isArray(resumeCp?.processedStackIds)
     ? resumeCp.processedStackIds.slice()
     : [];
-  /** Organize prefers existing topics; Reorganize must not. */
-  const preferExistingTopics = !reorganize;
+  /**
+   * Candidates for classify:
+   * Organize — existing Chrome groups ∪ seed topics (prefer those, then invent).
+   * Reorganize — seed topics only (existing cleared; invent when nothing fits).
+   * Never dump into Other.
+   */
+  const configSeedTopics = normalizeSeedTopics(config.seedTopics);
   /** @type {string[]} */
-  let seedExistingTopics = [];
-  if (preferExistingTopics) {
-    seedExistingTopics = await listPhysicalGroupTopicLabels(
+  let physicalGroupLabels = [];
+  if (!reorganize) {
+    physicalGroupLabels = await listPhysicalGroupTopicLabels(
       scope,
       typeof opts.currentWindowId === 'number'
         ? opts.currentWindowId
         : resumeCp?.currentWindowId ?? undefined,
     );
   }
+  const baseCandidateTopics = buildSeedCandidateTopics({
+    seedTopics: configSeedTopics,
+    existingGroupLabels: physicalGroupLabels,
+    reorganize,
+  });
+  const candidateMode = reorganize ? 'reorganize' : 'organize';
   const onCheckpoint = opts.onCheckpoint;
   const onLlmSpend = opts.onLlmSpend;
   const metrics = opts.metrics;
@@ -912,10 +927,12 @@ export async function groupTabsOnDemand(opts) {
             title: tab.title || '',
             snippet: excerpt,
             extractedText: excerpt,
-            preferExisting: preferExistingTopics,
-            existingTopics: preferExistingTopics
-              ? existingTopicsForClassify(topicRegistry, seedExistingTopics)
-              : [],
+            preferExisting: true,
+            candidateMode,
+            existingTopics: existingTopicsForClassify(
+              topicRegistry,
+              baseCandidateTopics,
+            ),
           }),
           Math.min(TIMEOUTS.CLASSIFY_MS, Math.max(500, deadline.remaining())),
           'classify',
@@ -1008,6 +1025,7 @@ export async function groupTabsOnDemand(opts) {
       topicCache,
       topicRegistry,
       config,
+      seedTopics: configSeedTopics,
       client,
       signal,
       deadline,
@@ -1450,9 +1468,13 @@ async function reclassifyAllStacks(opts) {
           title: stack.title || '',
           snippet: '',
           extractedText: '',
-          // Stack reclassify is part of Reorganize — never prefer existing topics.
-          preferExisting: false,
-          existingTopics: [],
+          // Stack reclassify is part of Reorganize — prefer seeds, invent when needed.
+          preferExisting: true,
+          candidateMode: 'reorganize',
+          existingTopics: existingTopicsForClassify(
+            topicRegistry,
+            opts.seedTopics || normalizeSeedTopics(config?.seedTopics),
+          ),
         }),
         Math.min(TIMEOUTS.CLASSIFY_MS, Math.max(500, deadline.remaining())),
         'classify-stack',

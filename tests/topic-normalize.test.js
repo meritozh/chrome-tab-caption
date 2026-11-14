@@ -15,9 +15,32 @@ describe('topic normalize + synonym merge', () => {
     assert.equal(normalizeTopicKey("OpenAI's API"), 'openais api');
   });
 
+  it('keeps English seed labels distinct in keys', () => {
+    assert.equal(
+      normalizeTopicKey('Open Source · AI / Agents'),
+      'open source ai agents',
+    );
+    assert.equal(
+      normalizeTopicKey('Reading · AI / Agents'),
+      'reading ai agents',
+    );
+    assert.notEqual(
+      normalizeTopicKey('Open Source · AI / Agents'),
+      normalizeTopicKey('Reading · AI / Agents'),
+    );
+  });
+
   it('formats English display labels', () => {
     assert.equal(formatTopicLabel('machine learning'), 'Machine Learning');
     assert.equal(formatTopicLabel('guides for react'), 'Guides for React');
+  });
+
+  it('preserves acronyms in English seed-style labels', () => {
+    assert.equal(
+      formatTopicLabel('Open Source · AI / Agents'),
+      'Open Source · AI / Agents',
+    );
+    assert.equal(formatTopicLabel('AI Agents'), 'AI Agents');
   });
 
   it('merges synonyms into the same normalizedKey', () => {
@@ -41,5 +64,31 @@ describe('topic normalize + synonym merge', () => {
   it('heuristic synonym detect for plurals', () => {
     assert.equal(heuristicTopicsAreSynonyms('Blog Post', 'Blog Posts'), true);
     assert.equal(heuristicTopicsAreSynonyms('Cats', 'Dogs'), false);
+  });
+
+  it('does not collapse domain-prefixed seeds into parent prefixes', () => {
+    assert.equal(
+      heuristicTopicsAreSynonyms('Open Source', 'Open Source · AI / Agents'),
+      false,
+    );
+    assert.equal(
+      heuristicTopicsAreSynonyms(
+        'Open Source · AI / Agents',
+        'Open Source · Frontend / Web',
+      ),
+      false,
+    );
+    assert.equal(
+      heuristicTopicsAreSynonyms('Shopping', 'Shopping & Life'),
+      false,
+    );
+    assert.equal(
+      heuristicTopicsAreSynonyms('Reading', 'Reading · Infrastructure'),
+      false,
+    );
+    assert.equal(
+      heuristicTopicsAreSynonyms('Social', 'Social & Messaging'),
+      false,
+    );
   });
 });

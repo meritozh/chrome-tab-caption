@@ -3,7 +3,11 @@
  * ADR §3.1 message table · §6 Config defaults · §10 Borrowed MSG pattern from Pilot.
  */
 
+import { DEFAULT_SEED_TOPICS } from './seed-topics.js';
+
 /** @typedef {'anthropic' | 'openai-responses'} LlmProvider */
+
+export { DEFAULT_SEED_TOPICS };
 
 export const EXTENSION_ID = 'chrome-tab-caption';
 
@@ -95,7 +99,14 @@ export const DEFAULT_CONFIG = Object.freeze({
   topicLabelLocale: 'en',
   /** Side Panel / Options UI language (`en` | `zh`). Independent of LLM topicLabelLocale. */
   uiLocale: 'en',
-  topicGranularity: 'fine',
+  /**
+   * Domain seed topics for classify prompts (editable in Settings).
+   * English labels only (Chrome group titles are English).
+   * Organize prefers existing groups ∪ seeds; Reorganize uses seeds + invent.
+   * Never includes Other — invent a same-granularity English topic when nothing fits.
+   */
+  seedTopics: [...DEFAULT_SEED_TOPICS],
+  topicGranularity: 'domain',
   searchPinyinEnabled: true,
   searchRank: 'recency-first',
   privacyShowFieldsPreview: true,

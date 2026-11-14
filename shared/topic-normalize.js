@@ -1,5 +1,5 @@
 /**
- * English fine-grained topic labels + synonym merge (ADR §5.2 / Decisions #4).
+ * English domain topic labels + synonym merge (ADR §5.2 / Decisions #4).
  * Heuristic normalize; LLM may suggest synonyms that collapse into one normalizedKey.
  */
 
@@ -11,7 +11,7 @@
  */
 
 /**
- * Normalize a topic label into a stable key (English, fine-grained).
+ * Normalize a topic label into a stable key (letters/digits).
  * @param {string | undefined | null} label
  * @returns {string}
  */
@@ -20,14 +20,14 @@ export function normalizeTopicKey(label) {
   return label
     .normalize('NFKC')
     .toLowerCase()
-    .replace(/['’]/g, '')
-    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/['\u2019']/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
     .replace(/\s+/g, ' ');
 }
 
 /**
- * Title-case a display label while keeping short connectors lowercase when mid-phrase.
+ * Title-case English display labels; keep short acronyms intact.
  * @param {string} label
  * @returns {string}
  */
@@ -40,6 +40,9 @@ export function formatTopicLabel(label) {
   return cleaned
     .split(' ')
     .map((word, i) => {
+      // Keep short acronyms (AI, API, ML) and punctuation tokens intact.
+      if (/^[A-Z0-9]{2,6}$/.test(word)) return word;
+      if (/^[^A-Za-z0-9]+$/.test(word)) return word;
       const lower = word.toLowerCase();
       if (i > 0 && small.has(lower)) return lower;
       return lower.charAt(0).toUpperCase() + lower.slice(1);
@@ -122,6 +125,9 @@ export function mergeTopicResult(result, registry) {
 /**
  * Heuristic synonym pairs for common English near-duplicates (no LLM required).
  * Used as a soft assist when merging labels across a batch.
+ * Exact match + light plural/singular only — do NOT treat parent prefixes
+ * (e.g. "Open Source" / "Shopping") as synonyms of domain child seeds
+ * ("Open Source · AI / Agents", "Shopping & Life").
  * @param {string} a
  * @param {string} b
  * @returns {boolean}
@@ -135,9 +141,5 @@ export function heuristicTopicsAreSynonyms(a, b) {
   if (ka + 's' === kb || kb + 's' === ka) return true;
   if (ka.endsWith('ies') && kb === ka.slice(0, -3) + 'y') return true;
   if (kb.endsWith('ies') && ka === kb.slice(0, -3) + 'y') return true;
-  // Prefix containment for short shared stems (min length guard)
-  const shorter = ka.length <= kb.length ? ka : kb;
-  const longer = ka.length <= kb.length ? kb : ka;
-  if (shorter.length >= 8 && longer.startsWith(shorter + ' ')) return true;
   return false;
 }

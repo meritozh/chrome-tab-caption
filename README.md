@@ -9,6 +9,7 @@ On-demand LLM topic grouping for Chrome tabs: organize when you ask, cache what 
 | | 中文 | English |
 |---|---|---|
 | **Organize** | Side Panel 一键整理：全量分类后按 `lastAccessed` 保留前 `maxOpenTabs`，**合并为单窗**并建物理 `tabGroups`；超额进 Stacks（仍写 topic cache） | On-demand classify → keep newest `maxOpenTabs` → **merge to one window** + topic groups; excess → Stacks (topics still cached) |
+| **Seed topics** | 可编辑**英文**领域种子列表（默认 Open Source/Reading × AI·Frontend·Infra + Video/Social/Shopping）；整理优先「已有分组 ∪ 种子」，重新整理用「种子 + 发明」；**从不**归入 Other | Editable **English** domain seed list; Organize prefers existing groups ∪ seeds; Reorganize uses seeds + invent; **never** Other |
 | **Side Panel** | 工具栏图标 **开关** Side Panel；Organize 仅在面板内；**设置**页为配置表（Options 仅跳转） | Toolbar icon **toggles** the panel; Organize in-panel; **Settings** table owns config (Options redirects) |
 | **Search** | Stacks 上方模糊搜索（拼音/首字母）；堆栈列表过滤 + Open 命中条 | Fuzzy + pinyin above Stacks; filters stack list + open-hit strip |
 | **Cache** | `urlKey` + content hash LRU，避免重复打 LLM | Topic cache so the same page isn’t reclassified |

@@ -15,8 +15,9 @@ import { resolveEndpointBaseUrl, DEFAULT_ENDPOINT_BY_PROVIDER } from './permissi
  * @property {string} title
  * @property {string} [snippet]
  * @property {string} [extractedText]
- * @property {string[]} [existingTopics] — English labels already in use
- * @property {boolean} [preferExisting] — default true when topics provided; false for Reorganize
+ * @property {string[]} [existingTopics] — candidate labels (existing groups ∪ seeds, or seeds alone)
+ * @property {boolean} [preferExisting] — prefer candidates when listed; omit/false only when empty
+ * @property {'organize' | 'reorganize'} [candidateMode] — wording hint for the candidate section
  */
 
 /**
@@ -36,13 +37,17 @@ import { resolveEndpointBaseUrl, DEFAULT_ENDPOINT_BY_PROVIDER } from './permissi
  */
 
 export const CLASSIFY_SYSTEM_PROMPT =
-  'You classify browser tabs into fine-grained English topic labels. ' +
+  'You classify browser tabs into domain-level English topic labels. ' +
   'Reply with a single JSON object only: {"topic":"English Topic","synonyms":["optional near-duplicate"],"confidence":0.0}. ' +
-  'Topics must be short, specific, and English. Prefer merging near-duplicates via synonyms. No markdown.';
+  'Topics and Chrome group titles must be short English domain buckets (product area), not per-repo names and not micro-splits like RAG vs Prompt. ' +
+  'When inventing a new topic, always use an English name. ' +
+  'Never use catch-all labels such as Other, General, Misc, or Uncategorized. ' +
+  'Prefer merging near-duplicates via synonyms. No markdown.';
 
 export const CLASSIFY_PREFER_EXISTING_SYSTEM_SUFFIX =
-  ' When the user message lists existing topics, prefer assigning the tab to one of those topics when a good fit exists. ' +
-  'Only invent a new topic label when none of the existing topics fit.';
+  ' When the user message lists candidate topics, prefer assigning the tab to one of those topics when a good fit exists. ' +
+  'Only invent a new English topic at the same domain granularity when none of the candidates fit. ' +
+  'Never dump into Other.';
 
 /** User-facing when provider or API key is missing. */
 export const LLM_CONFIG_REQUIRED_MESSAGE =
@@ -125,7 +130,7 @@ export function buildClassifyPayloadPreview(input, meta) {
       { name: 'model', value: meta.model ?? '' },
       { name: 'endpointBaseUrl', value: meta.endpointBaseUrl ?? '' },
     ],
-    note: 'API key is never shown in preview. English fine-grained topic labels only.',
+    note: 'API key is never shown in preview. English domain topics (seed ∪ groups); never Other.',
   };
 }
 
@@ -136,18 +141,25 @@ export function buildClassifyPayloadPreview(input, meta) {
 export function buildClassifyUserPrompt(input) {
   const excerpt = capExcerpt(input.extractedText || input.snippet || '', EXCERPT_HARD_CAP_CHARS);
   const lines = [
-    'Classify this tab into one fine-grained English topic.',
+    'Classify this tab into one domain-level English topic label.',
     `URL: ${input.url ?? ''}`,
     `Title: ${input.title ?? ''}`,
     excerpt ? `Excerpt: ${excerpt}` : 'Excerpt: (none)',
   ];
   if (shouldPreferExistingTopics(input)) {
     const topics = normalizeExistingTopics(input.existingTopics);
-    lines.push('Existing topics (prefer these when a good fit):');
+    const reorganize = input.candidateMode === 'reorganize';
+    lines.push(
+      reorganize
+        ? 'Seed topics (prefer these when a good fit; invent an English topic only when none fit):'
+        : 'Candidate topics (prefer existing groups, then seeds, when a good fit):',
+    );
     for (const topic of topics) {
       lines.push(`- ${topic}`);
     }
-    lines.push('Only create a new topic if none of the above fit.');
+    lines.push(
+      'Only invent a new English topic at the same domain granularity if none of the above fit. Never use Other.',
+    );
   }
   return lines.join('\n');
 }

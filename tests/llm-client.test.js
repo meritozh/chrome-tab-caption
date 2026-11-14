@@ -146,7 +146,7 @@ describe('llm-client', () => {
     assert.ok(prompt.length < 800);
   });
 
-  it('prefer-existing prompts list topics; Reorganize omits them', () => {
+  it('candidate prompts list English seeds/groups; forbid Other; Reorganize uses seed wording', () => {
     assert.deepEqual(normalizeExistingTopics([' Docs ', 'docs', 'News']), [
       'Docs',
       'News',
@@ -166,25 +166,45 @@ describe('llm-client', () => {
       false,
     );
 
-    const withPrefer = buildClassifyUserPrompt({
+    const organize = buildClassifyUserPrompt({
       url: 'https://a.test',
       title: 'A',
       preferExisting: true,
-      existingTopics: ['Docs', 'News'],
+      candidateMode: 'organize',
+      existingTopics: ['Docs', 'Open Source · AI / Agents'],
     });
-    assert.match(withPrefer, /Existing topics/);
-    assert.match(withPrefer, /- Docs/);
-    assert.match(withPrefer, /Only create a new topic/);
+    assert.match(organize, /Candidate topics/);
+    assert.match(organize, /- Docs/);
+    assert.match(organize, /Open Source · AI \/ Agents/);
+    assert.match(organize, /English topic/);
+    assert.match(organize, /Never use Other/);
+    assert.doesNotMatch(organize, /Seed topics \(/);
 
     const reorganize = buildClassifyUserPrompt({
       url: 'https://a.test',
       title: 'A',
-      preferExisting: false,
-      existingTopics: ['Docs', 'News'],
+      preferExisting: true,
+      candidateMode: 'reorganize',
+      existingTopics: ['Open Source · AI / Agents', 'Video'],
     });
-    assert.doesNotMatch(reorganize, /Existing topics/);
+    assert.match(reorganize, /Seed topics/);
+    assert.match(reorganize, /- Video/);
+    assert.match(reorganize, /invent an English topic/);
+    assert.match(reorganize, /Never use Other/);
+    assert.doesNotMatch(reorganize, /Candidate topics/);
+
+    const omit = buildClassifyUserPrompt({
+      url: 'https://a.test',
+      title: 'A',
+      preferExisting: false,
+      existingTopics: ['Docs'],
+    });
+    assert.doesNotMatch(omit, /Candidate topics|Seed topics/);
 
     assert.equal(buildClassifySystemPrompt({ preferExisting: false }), CLASSIFY_SYSTEM_PROMPT);
+    assert.match(CLASSIFY_SYSTEM_PROMPT, /English topic labels/);
+    assert.match(CLASSIFY_SYSTEM_PROMPT, /Never use catch-all/);
+    assert.doesNotMatch(CLASSIFY_SYSTEM_PROMPT, /Chinese/);
     assert.ok(
       buildClassifySystemPrompt({
         preferExisting: true,
