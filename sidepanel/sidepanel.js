@@ -14,6 +14,7 @@ import {
   shouldApplySettingsRetryCompletion,
   shouldMarkOrganizeConfigReady,
 } from '../shared/organize-cancel.js';
+import { mountVirtualList } from './virtual-list.js';
 
 /** Long-lived port so the service worker can toggle-close this panel. */
 const sidePanelPort = chrome.runtime.connect({ name: 'side-panel' });
@@ -939,43 +940,146 @@ async function recallStackById(stackId, title) {
   if (res?.ok) await refreshStacks();
 }
 
+/** Fixed row height for virtual Stacks cards (matches --stack-row). */
+const STACK_ROW_HEIGHT = 56;
+
+/**
+ * Hostname letter for missing favicons.
+ * @param {string | undefined} url
+ */
+function siteGlyph(url) {
+  try {
+    const host = new URL(url || '').hostname.replace(/^www\./, '');
+    return (host[0] || '?').toUpperCase();
+  } catch {
+    return '?';
+  }
+}
+
+/**
+ * Prefer stored favIconUrl; otherwise leave null and show glyph placeholder.
+ * @param {{ favIconUrl?: string, url?: string }} stack
+ * @returns {string | null}
+ */
+function resolveStackIconUrl(stack) {
+  const icon = typeof stack?.favIconUrl === 'string' ? stack.favIconUrl.trim() : '';
+  if (
+    icon &&
+    (icon.startsWith('https:') ||
+      icon.startsWith('http:') ||
+      icon.startsWith('data:') ||
+      icon.startsWith('chrome:') ||
+      icon.startsWith('chrome-extension:'))
+  ) {
+    return icon;
+  }
+  return null;
+}
+
+/**
+ * @param {object} stack
+ * @returns {HTMLButtonElement}
+ */
+function renderStackCard(stack) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'sp-stack-card';
+  btn.setAttribute('role', 'listitem');
+  btn.dataset.stackId = String(stack.id || '');
+  btn.title = 'Recall this stacked tab';
+
+  const iconUrl = resolveStackIconUrl(stack);
+  const img = document.createElement('img');
+  img.className = 'sp-stack-icon';
+  img.width = 32;
+  img.height = 32;
+  img.alt = '';
+  img.decoding = 'async';
+
+  const fallback = document.createElement('span');
+  fallback.className = 'sp-stack-icon sp-stack-icon-fallback';
+  fallback.setAttribute('aria-hidden', 'true');
+  fallback.textContent = siteGlyph(stack.url);
+
+  if (iconUrl) {
+    fallback.hidden = true;
+    img.src = iconUrl;
+    img.addEventListener('error', () => {
+      img.hidden = true;
+      fallback.hidden = false;
+    });
+  } else {
+    img.hidden = true;
+  }
+
+  const text = document.createElement('span');
+  text.className = 'sp-stack-text';
+  const title = document.createElement('span');
+  title.className = 'sp-stack-title';
+  title.textContent = stack.title || stack.url || '(untitled)';
+  const topic = document.createElement('span');
+  topic.className = 'sp-stack-topic';
+  topic.textContent = stack.topicLabel || stack.groupTitle || 'No topic';
+  text.append(title, topic);
+
+  btn.append(img, fallback, text);
+  return btn;
+}
+
+const stacksViewport = document.getElementById('stacks-viewport');
+/** @type {ReturnType<typeof mountVirtualList> | null} */
+let stacksVirtual = null;
+
+function ensureStacksVirtual() {
+  if (!stacksViewport || stacksVirtual) return stacksVirtual;
+  stacksVirtual = mountVirtualList({
+    container: stacksViewport,
+    itemHeight: STACK_ROW_HEIGHT,
+    overscan: 8,
+    getKey: (item) => String(/** @type {{ id?: string }} */ (item).id || ''),
+    renderItem: (item) => renderStackCard(/** @type {object} */ (item)),
+  });
+  return stacksVirtual;
+}
+
+function showStacksEmpty() {
+  if (!stacksViewport) return;
+  if (stacksVirtual) {
+    stacksVirtual.destroy();
+    stacksVirtual = null;
+  }
+  stacksViewport.replaceChildren();
+  const empty = document.createElement('p');
+  empty.className = 'sp-muted sp-stacks-empty';
+  empty.textContent =
+    'No stacked tabs yet — excess from Organize (and auto-reclaim) lands here.';
+  stacksViewport.append(empty);
+}
+
 async function refreshStacks() {
-  const list = document.getElementById('stacks-list');
-  if (!list) return;
+  if (!stacksViewport) return;
   const res = await sendToBackground(MSG.GET_STACKS).catch(() => null);
-  const stacks = res?.stacks ?? [];
+  const stacks = Array.isArray(res?.stacks) ? res.stacks : [];
   showStacksOverflow(res?.overflowPending);
 
   if (!stacks.length) {
-    list.innerHTML =
-      '<li class="sp-muted">No stacked tabs yet — excess from Organize (and auto-reclaim) lands here.</li>';
+    showStacksEmpty();
     return;
   }
-  list.innerHTML = stacks
-    .map((s) => {
-      const meta = [s.topicLabel || s.groupTitle, s.url].filter(Boolean).join(' · ');
-      return `<li class="sp-stack-item" data-stack-id="${escapeHtml(s.id)}">
-        <div>
-          <strong>${escapeHtml(s.title || s.url)}</strong><br />
-          <span class="sp-muted">${escapeHtml(meta)}</span>
-        </div>
-        <div class="sp-stack-actions">
-          <button type="button" class="sp-secondary sp-stack-recall" data-stack-id="${escapeHtml(s.id)}">Recall</button>
-        </div>
-      </li>`;
-    })
-    .join('');
+
+  const list = ensureStacksVirtual();
+  list?.setItems(stacks);
 }
 
-document.getElementById('stacks-list')?.addEventListener('click', (e) => {
-  const btn = /** @type {HTMLElement | null} */ (
-    e.target instanceof Element ? e.target.closest('.sp-stack-recall') : null
+stacksViewport?.addEventListener('click', (e) => {
+  const card = /** @type {HTMLElement | null} */ (
+    e.target instanceof Element ? e.target.closest('.sp-stack-card') : null
   );
-  if (!btn) return;
-  const stackId = btn.getAttribute('data-stack-id');
+  if (!card) return;
+  const stackId = card.getAttribute('data-stack-id');
   if (!stackId) return;
-  const item = btn.closest('.sp-stack-item');
-  const title = item?.querySelector('strong')?.textContent || stackId;
+  const title =
+    card.querySelector('.sp-stack-title')?.textContent || stackId;
   recallStackById(stackId, title);
 });
 

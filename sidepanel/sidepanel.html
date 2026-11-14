@@ -7,14 +7,12 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,560;9..144,700&family=Figtree:wght@400;550;650;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
-    <div class="sp-atmosphere" aria-hidden="true"></div>
-
     <header class="sp-header">
       <div class="sp-brand">
         <span class="sp-mark" aria-hidden="true"></span>
@@ -33,7 +31,7 @@
       </nav>
     </header>
 
-    <main id="view-main" class="sp-view is-active">
+    <main id="view-main" class="sp-view sp-view-main is-active">
       <section class="sp-hero" aria-labelledby="organize-heading">
         <h2 id="organize-heading" class="sp-hero-title">Organize</h2>
         <p class="sp-hero-lede">
@@ -58,7 +56,7 @@
         </div>
       </section>
 
-      <section class="sp-section" aria-labelledby="topics-heading">
+      <section class="sp-section sp-section-compact" aria-labelledby="topics-heading">
         <h2 id="topics-heading">Topics</h2>
         <p class="sp-help">From the last Organize — physical groups live in the merged window.</p>
         <ul id="topics-list" class="sp-list sp-appear">
@@ -66,7 +64,7 @@
         </ul>
       </section>
 
-      <section class="sp-section" aria-labelledby="search-heading">
+      <section class="sp-section sp-section-compact" aria-labelledby="search-heading">
         <h2 id="search-heading">Search</h2>
         <p class="sp-help">Fuzzy + pinyin over open tabs and Stacks. ↑↓ then Enter.</p>
         <label class="sp-sr" for="search-input">Search open tabs and stacks</label>
@@ -84,25 +82,34 @@
         </div>
       </section>
 
-      <section class="sp-section" aria-labelledby="stacks-heading">
-        <h2 id="stacks-heading">Stacks</h2>
-        <p class="sp-help">
-          Tabs this extension reclaimed (not browser recently-closed). Recall restores topic groups.
-        </p>
-        <div id="stacks-overflow" class="sp-overflow" hidden>
-          <h3 class="sp-subhead">Stack archive full</h3>
-          <p id="stacks-overflow-summary" class="sp-help"></p>
-          <div class="sp-row sp-actions">
-            <button type="button" id="btn-stacks-export" class="sp-cta">
-              Export oldest &amp; free space
-            </button>
-            <button type="button" id="btn-stacks-discard" class="sp-secondary">Discard oldest</button>
+      <section class="sp-section sp-stacks-section" aria-labelledby="stacks-heading">
+        <div class="sp-stacks-head">
+          <h2 id="stacks-heading">Stacks</h2>
+          <p class="sp-help">
+            Tabs this extension reclaimed (not browser recently-closed). Recall restores topic groups.
+          </p>
+          <div id="stacks-overflow" class="sp-overflow" hidden>
+            <h3 class="sp-subhead">Stack archive full</h3>
+            <p id="stacks-overflow-summary" class="sp-help"></p>
+            <div class="sp-row sp-actions">
+              <button type="button" id="btn-stacks-export" class="sp-cta">
+                Export oldest &amp; free space
+              </button>
+              <button type="button" id="btn-stacks-discard" class="sp-secondary">Discard oldest</button>
+            </div>
           </div>
+          <p id="stacks-status" class="sp-status" role="status" hidden></p>
         </div>
-        <p id="stacks-status" class="sp-status" role="status" hidden></p>
-        <ul id="stacks-list" class="sp-list sp-appear">
-          <li class="sp-muted">No stacked tabs yet — excess from Organize lands here.</li>
-        </ul>
+        <div
+          id="stacks-viewport"
+          class="sp-stacks-viewport"
+          role="list"
+          aria-labelledby="stacks-heading"
+        >
+          <p class="sp-muted sp-stacks-empty">
+            No stacked tabs yet — excess from Organize lands here.
+          </p>
+        </div>
       </section>
     </main>
 
