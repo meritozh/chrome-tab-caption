@@ -942,7 +942,8 @@ function renderSearchResults(res, query, fail = null) {
     clearStacksSearchFilter();
     searchResults.hidden = true;
     searchResults.innerHTML = '';
-    applyStacksDisplay();
+    // Clearing the filter jumps back to the top of the full list.
+    applyStacksDisplay({ resetScroll: true });
     return;
   }
 
@@ -952,7 +953,7 @@ function renderSearchResults(res, query, fail = null) {
     flatSearchHits = [];
     activeSearchIndex = -1;
     clearStacksSearchFilter();
-    applyStacksDisplay();
+    applyStacksDisplay({ resetScroll: true });
     const msg = transportError || workerError;
     searchResults.hidden = false;
     searchResults.innerHTML = `<p class="sp-muted">${escapeHtml(
@@ -964,16 +965,19 @@ function renderSearchResults(res, query, fail = null) {
 
   const open = Array.isArray(res?.open) ? res.open : [];
   const stacked = Array.isArray(res?.stacked) ? res.stacked : [];
-  flatSearchHits = [...open, ...stacked];
+  // Keyboard ↑↓/Enter only navigates the visible open-tab strip; stacked hits
+  // filter the virtual list (clicked there), not the hidden concat list.
+  flatSearchHits = open;
   activeSearchIndex = flatSearchHits.length ? 0 : -1;
 
   activeStacksFilterQuery = query;
   filteredStackIds = stacked
     .map((hit) => (typeof hit.stackId === 'string' ? hit.stackId : null))
     .filter(Boolean);
-  applyStacksDisplay();
+  // New ranked filter — scroll to top so first matches are not above the fold.
+  applyStacksDisplay({ resetScroll: true });
 
-  if (!flatSearchHits.length) {
+  if (!open.length && !stacked.length) {
     // Message lives in the results strip; list stays empty under the filter.
     searchResults.hidden = false;
     searchResults.innerHTML = `<p class="sp-muted">${escapeHtml(
@@ -986,7 +990,6 @@ function renderSearchResults(res, query, fail = null) {
   if (!open.length) {
     searchResults.hidden = true;
     searchResults.innerHTML = '';
-    syncSearchActiveClass();
     return;
   }
 
@@ -1447,8 +1450,9 @@ function showStacksEmpty(message) {
 
 /**
  * Render Stacks list, optionally filtered by the active fuzzy search.
+ * @param {{ resetScroll?: boolean }} [opts]
  */
-function applyStacksDisplay() {
+function applyStacksDisplay(opts = {}) {
   if (!stacksViewport) return;
 
   if (!cachedStacks.length) {
@@ -1475,7 +1479,7 @@ function applyStacksDisplay() {
   }
 
   const list = ensureStacksVirtual();
-  list?.setItems(items);
+  list?.setItems(items, { resetScroll: Boolean(opts.resetScroll) });
 }
 
 async function refreshStacks() {
