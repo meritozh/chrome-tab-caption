@@ -38,6 +38,7 @@ import { runSearchQuery } from './search.js';
 import { maybeReclaim, recallStack, exportOrDiscardStacks } from './stacks.js';
 import { runAutoDedupe } from './dedupe.js';
 import { buildOverflowPending } from '../shared/reclaim-policy.js';
+import { createTabActivityStore } from '../shared/tab-activity.js';
 import {
   loadMetrics,
   bumpMetrics,
@@ -76,6 +77,9 @@ let lastOrganizeState = null;
 /** Runtime: tabs we are closing (dedupe/reclaim) — suppressClosed recall pollution. */
 /** @type {Set<number>} */
 const closingTabIds = new Set();
+
+/** Just-activated lastAccessed bumps (reclaim must not punish the selected tab). */
+const tabActivity = createTabActivityStore();
 
 /** Minimal activity log (dedupe closes, etc.). */
 const activityLog = createActivityLog();
@@ -330,6 +334,7 @@ async function runOrganizeJob(opts) {
     overflowPending,
     setOverflowPending,
     activityLog,
+    tabActivity,
     metrics: metricsSnapshot,
     onCheckpoint: async (cp) => {
       await persistOrganizeCheckpoint(cp);
@@ -587,6 +592,7 @@ async function runDedupePass() {
     config,
     closingTabIds,
     activityLog,
+    tabActivity,
   });
   try {
     const result = await dedupeInFlight;
@@ -648,6 +654,7 @@ async function runReclaimPass() {
     overflowPending,
     setOverflowPending,
     activityLog,
+    tabActivity,
   });
   try {
     const result = await reclaimInFlight;
@@ -1146,7 +1153,34 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.url != null || changeInfo.status === 'complete') {
     scheduleDedupe();
   }
+  // Never scheduleReclaim on update/activate — switching tabs must not reclaim.
 });
+
+/**
+ * User selected a tab — bump lastAccessed override so reclaim keep-set includes it.
+ * Does NOT schedule reclaim (activate is not a tab-count change).
+ */
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  if (typeof activeInfo?.tabId === 'number') {
+    tabActivity.touch(activeInfo.tabId);
+  }
+});
+
+// Focusing a window also "selects" that window's active tab.
+try {
+  chrome.windows.onFocusChanged.addListener((windowId) => {
+    if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+    chrome.tabs
+      .query({ active: true, windowId })
+      .then((tabs) => {
+        const id = tabs?.[0]?.id;
+        if (typeof id === 'number') tabActivity.touch(id);
+      })
+      .catch(() => {});
+  });
+} catch {
+  // windows API may be unavailable in some test environments
+}
 
 chrome.tabs.onCreated.addListener(() => {
   // Reclaim pass always runs dedupe first (ADR order). Avoid a second overlapping
@@ -1157,6 +1191,7 @@ chrome.tabs.onCreated.addListener(() => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   pendingTabSync.delete(tabId);
   closingTabIds.delete(tabId);
+  tabActivity.clear(tabId);
   // After user/extension close, open count may drop below max — clear path for later.
   scheduleReclaim();
 });
@@ -1187,6 +1222,7 @@ ensureHydrated();
 export {
   closingTabIds,
   activityLog,
+  tabActivity,
   topicCache,
   stackStore,
   MSG,

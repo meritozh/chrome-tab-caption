@@ -13,6 +13,7 @@ import { suppressClosedRemove } from '../shared/suppress-closed.js';
 import { probeBeforeUnloadRisk } from '../shared/beforeunload-probe.js';
 import { tabLooksUnsaved } from '../shared/reclaim-policy.js';
 import { normalizeUrlKey } from '../shared/url-normalize.js';
+import { resolveFocusedActiveTabId } from './focused-tab.js';
 
 /** @type {Promise<unknown>} */
 let dedupeGate = Promise.resolve();
@@ -76,10 +77,14 @@ async function runAutoDedupeUnlocked(opts = {}) {
     return { closed: 0, kept: 0, groups: 0, stub: false, skipped: 'unavailable' };
   }
 
+  const tabActivity = opts instanceof Set ? undefined : opts.tabActivity;
+
   /** @type {chrome.tabs.Tab[]} */
   let tabs;
   try {
-    tabs = await tabsApi.query({});
+    const raw = await tabsApi.query({});
+    tabs =
+      typeof tabActivity?.applyToTabs === 'function' ? tabActivity.applyToTabs(raw) : raw;
   } catch (err) {
     return {
       closed: 0,
@@ -91,6 +96,8 @@ async function runAutoDedupeUnlocked(opts = {}) {
     };
   }
 
+  const protectActiveTabId = await resolveFocusedActiveTabId(tabs, tabsApi, windowsApi);
+
   // Probe possible close targets for beforeunload / dirty forms before planning.
   /** @type {Set<number>} */
   const beforeUnloadRiskIds = new Set();
@@ -99,6 +106,7 @@ async function runAutoDedupeUnlocked(opts = {}) {
       closingTabIds,
       stripHash: config.urlNormalizeStripHash !== false,
       stripTracking: config.urlNormalizeStripTrackingParams !== false,
+      protectActiveTabId,
     });
     /** @type {Set<number>} */
     const toProbe = new Set();
@@ -121,7 +129,9 @@ async function runAutoDedupeUnlocked(opts = {}) {
 
   // Re-query after probes — URLs may have changed during await.
   try {
-    tabs = await tabsApi.query({});
+    const raw = await tabsApi.query({});
+    tabs =
+      typeof tabActivity?.applyToTabs === 'function' ? tabActivity.applyToTabs(raw) : raw;
   } catch (err) {
     return {
       closed: 0,
@@ -133,10 +143,13 @@ async function runAutoDedupeUnlocked(opts = {}) {
     };
   }
 
+  const protectAfterProbe = await resolveFocusedActiveTabId(tabs, tabsApi, windowsApi);
+
   const plans = planAutoCloseOlder(tabs, {
     closingTabIds,
     ...normalizeOpts,
     beforeUnloadRiskIds,
+    protectActiveTabId: protectAfterProbe ?? protectActiveTabId,
   });
 
   if (!plans.length) {

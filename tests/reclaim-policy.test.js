@@ -90,6 +90,25 @@ describe('reclaim selection (least-recently-accessed)', () => {
     );
   });
 
+  it('never reclaims protectActiveTabId even when that leaves excess uncovered', () => {
+    // Only the protected active tab is reclaim-eligible; others are pinned/unsaved.
+    const crowded = [
+      { id: 1, url: 'https://a.test/1', lastAccessed: 1, active: true },
+      { id: 2, url: 'https://a.test/2', lastAccessed: 2, pinned: true },
+      { id: 3, url: 'about:blank', lastAccessed: 3 },
+      { id: 4, url: 'https://a.test/4', lastAccessed: 4, audible: true },
+    ];
+    const picked = selectReclaimTargets(crowded, {
+      maxOpenTabs: 1,
+      protectActiveTabId: 1,
+    });
+    assert.deepEqual(picked.map((t) => t.id), []);
+    assert.equal(
+      picked.some((t) => t.id === 1),
+      false,
+    );
+  });
+
   it('never reclaims the last remaining tab', () => {
     const one = [{ id: 9, url: 'https://only.test', lastAccessed: 1 }];
     assert.deepEqual(selectReclaimTargets(one, { maxOpenTabs: 1 }), []);

@@ -1148,6 +1148,7 @@ export async function groupTabsOnDemand(opts) {
         preferredWindowId:
           typeof opts.currentWindowId === 'number' ? opts.currentWindowId : null,
         activityLog: opts.activityLog,
+        tabActivity: opts.tabActivity,
         onProgress: (payload) => {
           broadcastProgress({ jobId, done: assignments.length, total, ...payload });
         },
