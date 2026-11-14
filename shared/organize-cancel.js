@@ -41,6 +41,29 @@ export function shouldApplyOrganizeCompletion(opts) {
 }
 
 /**
+ * Whether a failed-boot settings-retry hydrate should idle/update this panel.
+ * Matching runId always applies — even while busy (this retry set busy=true).
+ * Superseded runId must not call setOrganizeIdle (avoids clobbering a newer Organize).
+ * @param {object} opts
+ * @param {number} opts.runId — id captured when the retry started
+ * @param {number} opts.activeRunId — current side-panel generation
+ * @returns {boolean}
+ */
+export function shouldApplySettingsRetryCompletion(opts) {
+  return opts.runId === opts.activeRunId;
+}
+
+/**
+ * Whether GET_CONFIG / storage payload should mark organizeConfigReady.
+ * ok:false or missing config must leave not-ready so Organize can retry.
+ * @param {unknown} config
+ * @returns {boolean}
+ */
+export function shouldMarkOrganizeConfigReady(config) {
+  return Boolean(config && typeof config === 'object');
+}
+
+/**
  * Whether Cancel is idle (no local Organize job from this panel).
  * May still target a known alarm-resume jobId.
  * @param {'idle' | 'permissions' | 'running' | 'cancelling' | string} phase

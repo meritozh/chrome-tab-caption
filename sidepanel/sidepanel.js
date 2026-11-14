@@ -11,6 +11,8 @@ import {
   formatOrganizeCancelMessage,
   isIdleOrganizeCancel,
   shouldApplyOrganizeCompletion,
+  shouldApplySettingsRetryCompletion,
+  shouldMarkOrganizeConfigReady,
 } from '../shared/organize-cancel.js';
 
 /** Long-lived port so the service worker can toggle-close this panel. */
@@ -251,10 +253,11 @@ let cachedOrganizeConfig = {
  * @returns {boolean} true when a config object was applied
  */
 function rememberOrganizeConfig(config) {
-  if (!config || typeof config !== 'object') return false;
-  const apiKey = config.apiKey;
+  if (!shouldMarkOrganizeConfigReady(config)) return false;
+  const apiKey = /** @type {Record<string, unknown>} */ (config).apiKey;
   cachedOrganizeConfig = {
-    llmProvider: typeof config.llmProvider === 'string' ? config.llmProvider : '',
+    llmProvider:
+      typeof config.llmProvider === 'string' ? config.llmProvider : '',
     endpointBaseUrl:
       typeof config.endpointBaseUrl === 'string' ? config.endpointBaseUrl : '',
     hasApiKey: Boolean(
@@ -345,9 +348,16 @@ organizeBtn?.addEventListener('click', async () => {
     setBusy(true);
     organizeStatus.textContent = 'Loading settings…';
     await refreshCachedOrganizeConfig();
-    // Superseded (Cancel or a newer Organize) — do not clear the active run's UI.
-    if (runId !== organizeRunId) return;
-    if (organizeBusy || organizePhase !== 'permissions') return;
+    // Matching runId must idle even while busy (this retry set busy).
+    // Superseded runId must not setOrganizeIdle (would clobber a newer Organize).
+    if (
+      !shouldApplySettingsRetryCompletion({
+        runId,
+        activeRunId: organizeRunId,
+      })
+    ) {
+      return;
+    }
     setOrganizeIdle();
     if (!organizeConfigReady) {
       organizeStatus.textContent =
