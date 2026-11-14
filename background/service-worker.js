@@ -815,7 +815,12 @@ function onMessage(message, sender, sendResponse) {
         }
         break;
       }
-      case MSG.GROUP_TABS: {
+      case MSG.GROUP_TABS:
+      case MSG.REORGANIZE_TABS: {
+        const reorganize =
+          type === MSG.REORGANIZE_TABS ||
+          message.reorganize === true ||
+          message.clearCache === true;
         const config = await loadConfig();
         if (!isLlmConfigured(config)) {
           sendResponse({
@@ -852,7 +857,7 @@ function onMessage(message, sender, sendResponse) {
           activeOrganizeJob = null;
         }
         const controller = new AbortController();
-        const jobId = `group-${Date.now()}`;
+        const jobId = `${reorganize ? 'reorg' : 'group'}-${Date.now()}`;
         activeOrganizeJob = { jobId, controller, clientRunId };
         // Re-check after registration — Cancel may have landed during loadConfig.
         if (clientRunId != null && cancelledClientRunIds.has(clientRunId)) {
@@ -871,6 +876,10 @@ function onMessage(message, sender, sendResponse) {
             signal: controller.signal,
             jobId,
             clientRunId,
+            clearCache: reorganize || message.clearCache === true,
+            bypassCache: reorganize || message.bypassCache === true,
+            reorganize,
+            reclassifyStacks: reorganize || message.reclassifyStacks === true,
           });
         } finally {
           if (activeOrganizeJob?.jobId === jobId) {
@@ -885,7 +894,9 @@ function onMessage(message, sender, sendResponse) {
           await rememberOrganizeState({
             logical: result.logical,
             latestWinsAt: Date.now(),
-            latestWinsSource: 'extension-organize-cancelled',
+            latestWinsSource: reorganize
+              ? 'extension-reorganize-cancelled'
+              : 'extension-organize-cancelled',
           });
         }
         scheduleReclaimAfterOrganize(result);

@@ -34,6 +34,8 @@ export const SESSION_KEYS = Object.freeze({
 export const MSG = Object.freeze({
   // UI → SW
   GROUP_TABS: 'GROUP_TABS',
+  /** Clear topic cache, reclassify open tabs + Stacks, then organize (bypass cache). */
+  REORGANIZE_TABS: 'REORGANIZE_TABS',
   PREVIEW_CLASSIFY_PAYLOAD: 'PREVIEW_CLASSIFY_PAYLOAD',
   PREVIEW_GROUP_PAYLOAD: 'PREVIEW_GROUP_PAYLOAD',
   SEARCH_QUERY: 'SEARCH_QUERY',
@@ -86,6 +88,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   groupScope: 'single-window-merge',
   contentExtractionEnabled: true,
   topicLabelLocale: 'en',
+  /** Side Panel / Options UI language (`en` | `zh`). Independent of LLM topicLabelLocale. */
+  uiLocale: 'en',
   topicGranularity: 'fine',
   searchPinyinEnabled: true,
   searchRank: 'recency-first',

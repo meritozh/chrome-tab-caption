@@ -4,6 +4,22 @@
  */
 
 /**
+ * Clamp scrollTop so it never past the last row (avoids empty paint after shrink).
+ * @param {number} scrollTop
+ * @param {number} viewportHeight
+ * @param {number} itemHeight
+ * @param {number} itemCount
+ */
+export function clampScrollTop(scrollTop, viewportHeight, itemHeight, itemCount) {
+  const maxOffset = Math.max(
+    0,
+    totalHeight(itemCount, itemHeight) - Math.max(0, viewportHeight),
+  );
+  if (!Number.isFinite(scrollTop)) return 0;
+  return Math.min(Math.max(0, scrollTop), maxOffset);
+}
+
+/**
  * @param {{
  *   scrollTop: number,
  *   viewportHeight: number,
@@ -23,7 +39,7 @@ export function visibleRange({
   if (itemCount <= 0 || itemHeight <= 0 || viewportHeight < 0) {
     return { start: 0, end: 0 };
   }
-  const top = Math.max(0, scrollTop);
+  const top = clampScrollTop(scrollTop, viewportHeight, itemHeight, itemCount);
   const start = Math.max(0, Math.floor(top / itemHeight) - overscan);
   const end = Math.min(
     itemCount,
@@ -84,9 +100,30 @@ export function mountVirtualList({
     });
   }
 
+  function syncScrollTop() {
+    const count = items.length;
+    const maxOffset = Math.max(
+      0,
+      totalHeight(count, itemHeight) - container.clientHeight,
+    );
+    if (container.scrollTop > maxOffset) {
+      container.scrollTop = maxOffset;
+    }
+    scrollTop = clampScrollTop(
+      container.scrollTop,
+      container.clientHeight,
+      itemHeight,
+      count,
+    );
+  }
+
   function paint() {
     const count = items.length;
     spacer.style.height = `${totalHeight(count, itemHeight)}px`;
+
+    // After Recall/discard shrinks the list, re-read/clamp scroll so we do not
+    // keep a stale scrollTop past the last row (empty window).
+    syncScrollTop();
 
     if (count === 0) {
       spacer.replaceChildren();
@@ -135,7 +172,12 @@ export function mountVirtualList({
   }
 
   function onScroll() {
-    scrollTop = container.scrollTop;
+    scrollTop = clampScrollTop(
+      container.scrollTop,
+      container.clientHeight,
+      itemHeight,
+      items.length,
+    );
     schedule();
   }
 

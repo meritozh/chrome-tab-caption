@@ -17,4 +17,14 @@ describe('TopicCacheLru', () => {
   it('caps excerpts', () => {
     assert.ok(capExcerpt('x'.repeat(400), 280).length <= 280);
   });
+
+  it('clear wipes all entries (Reorganize)', () => {
+    const cache = new TopicCacheLru(10);
+    cache.upsert({ urlKey: 'a', contentHash: '1', topicKey: 't1', topicLabel: 'T1' });
+    cache.upsert({ urlKey: 'b', contentHash: '1', topicKey: 't2', topicLabel: 'T2' });
+    assert.equal(cache.size, 2);
+    cache.clear();
+    assert.equal(cache.size, 0);
+    assert.equal(cache.lookup('a', '1'), null);
+  });
 });

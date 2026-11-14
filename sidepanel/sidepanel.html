@@ -17,38 +17,63 @@
       <div class="sp-brand">
         <span class="sp-mark" aria-hidden="true"></span>
         <div class="sp-brand-text">
-          <p class="sp-product">Tab Caption</p>
-          <p class="sp-tagline">Topics on demand. One window when you organize.</p>
+          <p class="sp-product" data-i18n="product.title">Tab Caption</p>
+          <p class="sp-tagline" data-i18n="product.tagline">
+            Topics on demand. One window when you organize.
+          </p>
         </div>
       </div>
-      <nav class="sp-nav" aria-label="Panel views">
-        <button type="button" id="btn-view-main" class="sp-nav-btn is-active" data-view="main">
-          Organize
-        </button>
-        <button type="button" id="btn-view-settings" class="sp-nav-btn" data-view="settings">
-          Settings
-        </button>
-      </nav>
+      <div class="sp-header-controls">
+        <nav class="sp-nav" data-i18n-aria="nav.aria" aria-label="Panel views">
+          <button type="button" id="btn-view-main" class="sp-nav-btn is-active" data-view="main">
+            <span data-i18n="nav.organize">Organize</span>
+          </button>
+          <button type="button" id="btn-view-settings" class="sp-nav-btn" data-view="settings">
+            <span data-i18n="nav.settings">Settings</span>
+          </button>
+        </nav>
+        <label class="sp-locale">
+          <span class="sp-sr" data-i18n="locale.label">Language</span>
+          <select id="ui-locale" title="Language">
+            <option value="en" data-i18n="locale.en">English</option>
+            <option value="zh" data-i18n="locale.zh">中文</option>
+          </select>
+        </label>
+      </div>
     </header>
 
     <main id="view-main" class="sp-view sp-view-main is-active">
       <section class="sp-hero" aria-labelledby="organize-heading">
-        <h2 id="organize-heading" class="sp-hero-title">Organize</h2>
-        <p class="sp-hero-lede">
+        <h2 id="organize-heading" class="sp-hero-title" data-i18n="organize.heading">Organize</h2>
+        <p class="sp-hero-lede" data-i18n="organize.lede">
           One click classifies tabs, keeps the newest open, and merges into one window.
         </p>
         <div class="sp-hero-controls">
-          <label class="sp-label" for="group-scope">Scope</label>
+          <label class="sp-label" for="group-scope" data-i18n="organize.scope">Scope</label>
           <select id="group-scope" title="All windows or current window">
-            <option value="all">All windows → single window</option>
-            <option value="current">Current window only</option>
+            <option value="all" data-i18n="organize.scopeAll">All windows → single window</option>
+            <option value="current" data-i18n="organize.scopeCurrent">Current window only</option>
           </select>
         </div>
         <div class="sp-row sp-actions sp-organize-actions">
-          <button type="button" id="btn-organize" class="sp-cta sp-cta-hero">Organize tabs</button>
-          <button type="button" id="btn-cancel-organize" class="sp-secondary">Cancel</button>
+          <button type="button" id="btn-organize" class="sp-cta sp-cta-hero" data-i18n="organize.btn">
+            Organize tabs
+          </button>
+          <button
+            type="button"
+            id="btn-reorganize"
+            class="sp-secondary"
+            data-i18n="organize.reorganize"
+            data-i18n-title="organize.reorganizeHint"
+            title="Reorganize clears the topic cache and re-classifies every open tab and Stack."
+          >
+            Reorganize
+          </button>
+          <button type="button" id="btn-cancel-organize" class="sp-secondary" data-i18n="organize.cancel">
+            Cancel
+          </button>
         </div>
-        <p id="organize-status" class="sp-status" role="status">
+        <p id="organize-status" class="sp-status" role="status" data-i18n="organize.ready">
           Ready — Organize applies LLM topics immediately (Cancel stops an in-flight job).
         </p>
         <div class="sp-progress-track" id="organize-progress-track" hidden>
@@ -57,20 +82,25 @@
       </section>
 
       <section class="sp-section sp-section-compact" aria-labelledby="topics-heading">
-        <h2 id="topics-heading">Topics</h2>
-        <p class="sp-help">From the last Organize — physical groups live in the merged window.</p>
+        <h2 id="topics-heading" data-i18n="topics.heading">Topics</h2>
+        <p class="sp-help" data-i18n="topics.help">
+          From the last Organize — physical groups live in the merged window.
+        </p>
         <ul id="topics-list" class="sp-list sp-appear">
-          <li class="sp-muted">No topics yet — run Organize.</li>
+          <li class="sp-muted" data-i18n="topics.empty">No topics yet — run Organize.</li>
         </ul>
       </section>
 
       <section class="sp-section sp-section-compact" aria-labelledby="search-heading">
-        <h2 id="search-heading">Search</h2>
-        <p class="sp-help">Fuzzy + pinyin over open tabs and Stacks. ↑↓ then Enter.</p>
-        <label class="sp-sr" for="search-input">Search open tabs and stacks</label>
+        <h2 id="search-heading" data-i18n="search.heading">Search</h2>
+        <p class="sp-help" data-i18n="search.help">
+          Fuzzy + pinyin over open tabs and Stacks. ↑↓ then Enter.
+        </p>
+        <label class="sp-sr" for="search-input" data-i18n="search.aria">Search open tabs and stacks</label>
         <input
           id="search-input"
           type="search"
+          data-i18n-placeholder="search.placeholder"
           placeholder="Title, URL, topic (pinyin OK)"
           autocomplete="off"
           aria-controls="search-results"
@@ -78,24 +108,33 @@
         />
         <p id="search-status" class="sp-status" role="status" hidden></p>
         <div id="search-results" class="sp-results sp-appear" aria-live="polite">
-          <p class="sp-muted">Type to search Open tabs and Stacked records.</p>
+          <p class="sp-muted" data-i18n="search.emptyPrompt">
+            Type to search Open tabs and Stacked records.
+          </p>
         </div>
       </section>
 
       <section class="sp-section sp-stacks-section" aria-labelledby="stacks-heading">
         <div class="sp-stacks-head">
-          <h2 id="stacks-heading">Stacks</h2>
-          <p class="sp-help">
+          <h2 id="stacks-heading" data-i18n="stacks.heading">Stacks</h2>
+          <p class="sp-help" data-i18n="stacks.help">
             Tabs this extension reclaimed (not browser recently-closed). Recall restores topic groups.
           </p>
           <div id="stacks-overflow" class="sp-overflow" hidden>
-            <h3 class="sp-subhead">Stack archive full</h3>
+            <h3 class="sp-subhead" data-i18n="stacks.overflowTitle">Stack archive full</h3>
             <p id="stacks-overflow-summary" class="sp-help"></p>
             <div class="sp-row sp-actions">
-              <button type="button" id="btn-stacks-export" class="sp-cta">
+              <button type="button" id="btn-stacks-export" class="sp-cta" data-i18n="stacks.export">
                 Export oldest &amp; free space
               </button>
-              <button type="button" id="btn-stacks-discard" class="sp-secondary">Discard oldest</button>
+              <button
+                type="button"
+                id="btn-stacks-discard"
+                class="sp-secondary"
+                data-i18n="stacks.discard"
+              >
+                Discard oldest
+              </button>
             </div>
           </div>
           <p id="stacks-status" class="sp-status" role="status" hidden></p>
@@ -103,34 +142,42 @@
         <div
           id="stacks-viewport"
           class="sp-stacks-viewport"
-          role="list"
           aria-labelledby="stacks-heading"
         >
-          <p class="sp-muted sp-stacks-empty">
+          <p class="sp-muted sp-stacks-empty" data-i18n="stacks.empty">
             No stacked tabs yet — excess from Organize lands here.
           </p>
         </div>
       </section>
     </main>
 
-    <main id="view-settings" class="sp-view" hidden>
+    <main id="view-settings" class="sp-view sp-view-settings" hidden>
       <section class="sp-section" aria-labelledby="settings-heading">
-        <h2 id="settings-heading">Settings</h2>
-        <p class="sp-help">
+        <h2 id="settings-heading" data-i18n="settings.heading">Settings</h2>
+        <p class="sp-help" data-i18n="settings.help">
           LLM endpoints, thresholds, and privacy live on the Options page. Organize stays in this
           panel — Options is settings only.
         </p>
-        <a id="link-options" class="sp-link" href="../options/options.html" target="_blank" rel="noopener">
+        <a
+          id="link-options"
+          class="sp-link"
+          href="../options/options.html"
+          target="_blank"
+          rel="noopener"
+          data-i18n="settings.openOptions"
+        >
           Open Options
         </a>
       </section>
 
       <section class="sp-section" aria-labelledby="preview-heading">
-        <h2 id="preview-heading">Field preview</h2>
-        <p class="sp-help">
+        <h2 id="preview-heading" data-i18n="preview.heading">Field preview</h2>
+        <p class="sp-help" data-i18n="preview.help">
           Inspect classify fields for the active tab without starting Organize (informational only).
         </p>
-        <button type="button" id="btn-preview" class="sp-secondary">Preview classify fields</button>
+        <button type="button" id="btn-preview" class="sp-secondary" data-i18n="preview.btn">
+          Preview classify fields
+        </button>
         <pre id="preview-out" class="sp-pre" hidden></pre>
       </section>
     </main>

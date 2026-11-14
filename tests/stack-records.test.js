@@ -42,6 +42,28 @@ describe('StackRecordStore capacity', () => {
     assert.equal(store.list()[0].title, 'B');
   });
 
+  it('update patches topic fields on an existing record', () => {
+    const store = new StackRecordStore(5);
+    const created = store.tryPush(
+      createStackRecord({
+        id: 's1',
+        url: 'https://a.test',
+        title: 'A',
+        topicKey: 'old',
+        topicLabel: 'Old',
+      }),
+    );
+    assert.equal(created.accepted, true);
+    const updated = store.update('s1', {
+      topicKey: 'docs',
+      topicLabel: 'Docs',
+      groupTitle: 'Docs',
+    });
+    assert.equal(updated?.topicLabel, 'Docs');
+    assert.equal(store.getById('s1')?.topicKey, 'docs');
+    assert.equal(store.update('missing', { topicLabel: 'X' }), null);
+  });
+
   it('discardOldest frees room for later tryPush', () => {
     const store = new StackRecordStore(2);
     store.tryPush(createStackRecord({ url: 'https://a.test', title: 'A', reclaimedAt: 1 }));

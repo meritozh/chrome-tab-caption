@@ -1,6 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { visibleRange, totalHeight } from '../sidepanel/virtual-list.js';
+import {
+  visibleRange,
+  totalHeight,
+  clampScrollTop,
+} from '../sidepanel/virtual-list.js';
 
 describe('visibleRange', () => {
   it('returns empty window for empty lists', () => {
@@ -65,6 +69,27 @@ describe('visibleRange', () => {
       }),
       { start: 0, end: 2 },
     );
+  });
+
+  it('clamps stale scrollTop after itemCount shrink (no empty window)', () => {
+    // Without clamp, start would jump past itemCount and paint nothing.
+    const range = visibleRange({
+      scrollTop: 5000,
+      viewportHeight: 200,
+      itemHeight: 50,
+      itemCount: 5,
+      overscan: 2,
+    });
+    assert.equal(range.start, 0);
+    assert.equal(range.end, 5);
+    assert.ok(range.end > range.start);
+  });
+});
+
+describe('clampScrollTop', () => {
+  it('caps to max scroll offset', () => {
+    assert.equal(clampScrollTop(9999, 200, 50, 5), 50);
+    assert.equal(clampScrollTop(-10, 200, 50, 5), 0);
   });
 });
 

@@ -119,6 +119,19 @@ export class StackRecordStore {
   }
 
   /**
+   * Patch fields on an existing stack record (e.g. reclassify topic).
+   * @param {string} id
+   * @param {Partial<StackRecord>} patch
+   * @returns {StackRecord | null}
+   */
+  update(id, patch) {
+    const rec = this.getById(id);
+    if (!rec || !patch || typeof patch !== 'object') return null;
+    Object.assign(rec, patch);
+    return rec;
+  }
+
+  /**
    * Export payload (JSON). Used by overflow export CTA.
    * @param {{ oldestOnly?: number } | null} [opts]
    * @returns {string}

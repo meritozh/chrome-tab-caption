@@ -8,13 +8,90 @@ import { MSG, STORAGE_KEYS } from '../shared/constants.js';
 import { sendToBackground, onBackgroundBroadcast } from '../shared/messages.js';
 import { requestOrganizePermissions } from '../shared/permissions.js';
 import {
-  formatOrganizeCancelMessage,
   isIdleOrganizeCancel,
   shouldApplyOrganizeCompletion,
   shouldApplySettingsRetryCompletion,
   shouldMarkOrganizeConfigReady,
 } from '../shared/organize-cancel.js';
 import { mountVirtualList } from './virtual-list.js';
+import { applyDomI18n, normalizeUiLocale, t } from './i18n.js';
+
+/** @type {import('./i18n.js').UiLocale} */
+let uiLocale = 'en';
+
+/** @param {string} key @param {Record<string, string | number> | null} [params] */
+function tt(key, params = null) {
+  return t(uiLocale, key, params);
+}
+
+function localizeCancelMessage({ llmCallsAttempted = 0, classified = 0 } = {}) {
+  const attempted = Math.max(0, Number(llmCallsAttempted) || 0);
+  const classifiedN = Math.max(0, Number(classified) || 0);
+  if (attempted <= 0) return tt('organize.cancelNoLlm');
+  return tt('organize.cancelWithLlm', {
+    attempted,
+    callWord: attempted === 1 ? tt('organize.call') : tt('organize.calls'),
+    classifiedNote:
+      classifiedN > 0 ? tt('organize.classifiedNote', { n: classifiedN }) : '',
+  });
+}
+
+/**
+ * Prefer SW messageKey when present; else map known phases; else raw message.
+ * @param {Record<string, unknown>} message
+ */
+function formatProgressMessage(message) {
+  if (typeof message.messageKey === 'string' && message.messageKey) {
+    const params =
+      message.messageParams && typeof message.messageParams === 'object'
+        ? /** @type {Record<string, string | number>} */ (message.messageParams)
+        : {
+            current: Number(message.current || message.refineIndex) || 0,
+            total: Number(message.refineTotal || message.total) || 0,
+          };
+    return tt(message.messageKey, params);
+  }
+  const phase = typeof message.phase === 'string' ? message.phase : '';
+  if (phase === 'clear-cache') return tt('progress.clearedCache');
+  if (phase === 'quick-pass') return tt('progress.quickPass');
+  if (phase === 'refine') {
+    return tt('progress.refine', {
+      current: Number(message.refineIndex) || 0,
+      total: Number(message.refineTotal || message.total) || 0,
+    });
+  }
+  if (phase === 'stacks') {
+    return tt('progress.stacks', {
+      current: Number(message.current || message.done) || 0,
+      total: Number(message.total) || 0,
+    });
+  }
+  if (phase === 'merge') return tt('progress.merge');
+  if (phase === 'done') return tt('progress.done');
+  if (phase === 'cancelled') return tt('progress.cancelled');
+  if (phase === 'error') return tt('progress.error');
+  return typeof message.message === 'string' ? message.message : '';
+}
+
+function applyLocale(nextLocale, { persist = false } = {}) {
+  uiLocale = normalizeUiLocale(nextLocale);
+  applyDomI18n(document, uiLocale);
+  const select = /** @type {HTMLSelectElement | null} */ (
+    document.getElementById('ui-locale')
+  );
+  if (select) select.value = uiLocale;
+  if (
+    !organizeBusy &&
+    organizePhase === 'idle' &&
+    organizeStatus &&
+    organizeConfigReady
+  ) {
+    organizeStatus.textContent = tt('organize.ready');
+  }
+  if (persist) {
+    sendToBackground(MSG.SET_CONFIG, { patch: { uiLocale } }).catch(() => {});
+  }
+}
 
 /** Long-lived port so the service worker can toggle-close this panel. */
 const sidePanelPort = chrome.runtime.connect({ name: 'side-panel' });
@@ -58,10 +135,12 @@ document.getElementById('link-options')?.addEventListener('click', (e) => {
 });
 
 const organizeBtn = document.getElementById('btn-organize');
+const reorganizeBtn = document.getElementById('btn-reorganize');
 const cancelBtn = document.getElementById('btn-cancel-organize');
 const organizeStatus = document.getElementById('organize-status');
 const progressTrack = document.getElementById('organize-progress-track');
 const scopeSelect = /** @type {HTMLSelectElement | null} */ (document.getElementById('group-scope'));
+const localeSelect = /** @type {HTMLSelectElement | null} */ (document.getElementById('ui-locale'));
 
 function setOrganizeProgressVisible(visible) {
   if (progressTrack) progressTrack.hidden = !visible;
@@ -69,6 +148,8 @@ function setOrganizeProgressVisible(visible) {
 }
 
 let organizeBusy = false;
+/** @type {'organize' | 'reorganize'} */
+let activeOrganizeMode = 'organize';
 
 /** @returns {number} unique across side-panel windows */
 function nextOrganizeRunId() {
@@ -108,10 +189,15 @@ let organizeConfigReady = false;
 let organizeConfigLoadFailed = false;
 
 function syncOrganizeEnabled() {
-  if (!organizeBtn) return;
-  // Disable until hydrated; if hydrate failed, keep clickable for recoverable retry.
-  organizeBtn.disabled =
+  const blocked =
     organizeBusy || (!organizeConfigReady && !organizeConfigLoadFailed);
+  // Disable until hydrated; if hydrate failed, keep Organize clickable to retry.
+  if (organizeBtn) organizeBtn.disabled = blocked;
+  // Reorganize requires a successful hydrate (needs LLM path).
+  if (reorganizeBtn) {
+    reorganizeBtn.disabled =
+      organizeBusy || !organizeConfigReady;
+  }
 }
 
 function setBusy(busy) {
@@ -120,6 +206,7 @@ function setBusy(busy) {
   // Cancel stays enabled so the user can abort permission / running jobs.
   if (cancelBtn) cancelBtn.disabled = false;
   if (scopeSelect) scopeSelect.disabled = busy;
+  if (localeSelect) localeSelect.disabled = busy;
   if (!busy) setOrganizeProgressVisible(false);
 }
 
@@ -205,10 +292,11 @@ function endAdoptedAlarmResumeUi() {
   if (
     status.startsWith('Alarm resume') ||
     status.startsWith('Resuming Organize') ||
-    status === 'Organizing…' ||
-    status === 'Cancelling…'
+    status === tt('organize.busy') ||
+    status === tt('organize.reorganizing') ||
+    status === tt('organize.cancelling')
   ) {
-    organizeStatus.textContent = 'Organize ended.';
+    organizeStatus.textContent = tt('organize.ended');
   }
   setOrganizeIdle();
   sendToBackground(MSG.GET_LOGICAL_TOPICS)
@@ -266,6 +354,9 @@ function rememberOrganizeConfig(config) {
     ),
     contentExtractionEnabled: config.contentExtractionEnabled !== false,
   };
+  if (typeof config.uiLocale === 'string') {
+    uiLocale = normalizeUiLocale(config.uiLocale);
+  }
   return true;
 }
 
@@ -334,20 +425,23 @@ function refreshCachedOrganizeConfig() {
   });
 }
 
-const ORGANIZE_READY_STATUS =
-  'Ready — Organize applies LLM topics immediately (Cancel stops an in-flight job).';
-
-organizeBtn?.addEventListener('click', async () => {
+/**
+ * Shared Organize / Reorganize click path.
+ * @param {'organize' | 'reorganize'} mode
+ */
+async function startOrganizeJob(mode = 'organize') {
   if (organizeBusy) return;
+  const reorganize = mode === 'reorganize';
 
   // Recoverable path when boot hydrate failed: refetch, then ask for a second click
   // so permissions.request can still be the first await of a fresh user gesture.
   if (!organizeConfigReady) {
+    if (reorganize) return;
     const runId = (organizeRunId = nextOrganizeRunId());
     // Non-idle phase so Cancel does not take the idle/alarm path mid-retry.
     organizePhase = 'permissions';
     setBusy(true);
-    organizeStatus.textContent = 'Loading settings…';
+    organizeStatus.textContent = tt('organize.loadingSettings');
     await refreshCachedOrganizeConfig();
     // Matching runId must idle even while busy (this retry set busy).
     // Superseded runId must not setOrganizeIdle (would clobber a newer Organize).
@@ -361,13 +455,13 @@ organizeBtn?.addEventListener('click', async () => {
     }
     setOrganizeIdle();
     if (!organizeConfigReady) {
-      organizeStatus.textContent =
-        'Could not load settings. Click Organize to retry.';
+      organizeStatus.textContent = tt('organize.settingsRetry');
       return;
     }
     organizeStatus.textContent = isCachedLlmReady()
-      ? 'Settings loaded — click Organize again.'
-      : 'LLM not configured — open Options and set provider + API key before Organize.';
+      ? tt('organize.settingsLoaded')
+      : tt('organize.llmMissing');
+    applyLocale(uiLocale);
     return;
   }
 
@@ -376,9 +470,12 @@ organizeBtn?.addEventListener('click', async () => {
   lastClassified = 0;
   activeJobId = null;
   adoptedAlarmResume = false;
+  activeOrganizeMode = mode;
   organizePhase = 'permissions';
   setBusy(true);
-  organizeStatus.textContent = 'Organizing…';
+  organizeStatus.textContent = reorganize
+    ? tt('organize.reorganizing')
+    : tt('organize.busy');
   setOrganizeProgressVisible(true);
 
   const scope = scopeSelect?.value === 'current' ? 'current' : 'all';
@@ -387,8 +484,7 @@ organizeBtn?.addEventListener('click', async () => {
   const provider = cached.llmProvider || '';
   if (!isCachedLlmReady(cached)) {
     setOrganizeIdle();
-    organizeStatus.textContent =
-      'LLM not configured — open Options and set provider + API key before Organize.';
+    organizeStatus.textContent = tt('organize.llmMissing');
     return;
   }
 
@@ -400,14 +496,13 @@ organizeBtn?.addEventListener('click', async () => {
   });
 
   if (runId !== organizeRunId) {
-    // Cancelled during permission prompt — do not start GROUP_TABS.
+    // Cancelled during permission prompt — do not start GROUP_TABS / REORGANIZE.
     return;
   }
 
   if (!allowed) {
     setOrganizeIdle();
-    organizeStatus.textContent =
-      'Host permission denied. Grant LLM + page access, then Organize again.';
+    organizeStatus.textContent = tt('organize.permissionDenied');
     return;
   }
 
@@ -421,21 +516,26 @@ organizeBtn?.addEventListener('click', async () => {
   if (cfg?.config) rememberOrganizeConfig(cfg.config);
   if (!isCachedLlmReady()) {
     setOrganizeIdle();
-    organizeStatus.textContent =
-      'LLM not configured — open Options and set provider + API key before Organize.';
+    organizeStatus.textContent = tt('organize.llmMissing');
     return;
   }
 
   organizePhase = 'running';
   if (runId !== organizeRunId) {
-    // Cancelled after permission grant, before GROUP_TABS dispatch.
+    // Cancelled after permission grant, before dispatch.
     return;
   }
-  const res = await sendToBackground(MSG.GROUP_TABS, {
-    scope,
-    windowId,
-    clientRunId: runId,
-  }).catch((err) => ({ ok: false, error: String(err) }));
+  const res = await sendToBackground(
+    reorganize ? MSG.REORGANIZE_TABS : MSG.GROUP_TABS,
+    {
+      scope,
+      windowId,
+      clientRunId: runId,
+      ...(reorganize
+        ? { reorganize: true, clearCache: true, bypassCache: true, reclassifyStacks: true }
+        : {}),
+    },
+  ).catch((err) => ({ ok: false, error: String(err) }));
 
   const stillActive = shouldApplyOrganizeCompletion({
     runId,
@@ -450,7 +550,7 @@ organizeBtn?.addEventListener('click', async () => {
     if (res?.cancelled) {
       lastLlmCallsAttempted = Number(res.llmCallsAttempted) || lastLlmCallsAttempted;
       lastClassified = Number(res.classified) || lastClassified;
-      organizeStatus.textContent = formatOrganizeCancelMessage({
+      organizeStatus.textContent = localizeCancelMessage({
         llmCallsAttempted: lastLlmCallsAttempted,
         classified: lastClassified,
       });
@@ -464,12 +564,10 @@ organizeBtn?.addEventListener('click', async () => {
   if (res?.cancelled) {
     lastLlmCallsAttempted = Number(res.llmCallsAttempted) || 0;
     lastClassified = Number(res.classified) || 0;
-    organizeStatus.textContent =
-      res.message ||
-      formatOrganizeCancelMessage({
-        llmCallsAttempted: lastLlmCallsAttempted,
-        classified: lastClassified,
-      });
+    organizeStatus.textContent = localizeCancelMessage({
+      llmCallsAttempted: lastLlmCallsAttempted,
+      classified: lastClassified,
+    });
     if (Array.isArray(res.logical) && res.logical.length) {
       renderLogicalTopics(res.logical);
     }
@@ -480,11 +578,10 @@ organizeBtn?.addEventListener('click', async () => {
   if (!res?.ok) {
     setOrganizeIdle();
     organizeStatus.textContent = res?.needsLlmConfig
-      ? res.error ||
-        'LLM not configured — open Options and set provider + API key before Organize.'
+      ? res.error || tt('organize.llmMissing')
       : res?.needsPermission
-        ? `${res.error || 'Host permission missing.'} Organize again after granting access.`
-        : res?.error || 'Organize failed';
+        ? `${res.error || 'Host permission missing.'} ${tt('organize.btn')}`
+        : res?.error || tt('organize.failed');
     return;
   }
 
@@ -493,14 +590,23 @@ organizeBtn?.addEventListener('click', async () => {
   const applied = res.physical?.applied ?? 0;
   const reclaimed = Number(res.merge?.reclaimed) || 0;
   const merged =
-    res.merge?.targetWindowId != null
-      ? ` merged to one window`
-      : '';
-  const stacked = reclaimed > 0 ? `, ${reclaimed} stacked` : '';
-  organizeStatus.textContent = `Done — ${topics} topics, ${applied} groups${merged}${stacked}, ${res.classified ?? 0} classified.`;
+    res.merge?.targetWindowId != null ? tt('organize.merged') : '';
+  const stacked =
+    reclaimed > 0 ? tt('organize.stacked', { n: reclaimed }) : '';
+  organizeStatus.textContent = tt('organize.done', {
+    topics,
+    applied,
+    merged,
+    stacked,
+    classified: res.classified ?? 0,
+  });
   renderLogicalTopics(res.logical || []);
-  if (reclaimed > 0) refreshStacks();
-});
+  // Always refresh stacks after reorganize (topics may have changed).
+  if (reorganize || reclaimed > 0) refreshStacks();
+}
+
+organizeBtn?.addEventListener('click', () => startOrganizeJob('organize'));
+reorganizeBtn?.addEventListener('click', () => startOrganizeJob('reorganize'));
 
 cancelBtn?.addEventListener('click', async () => {
   const phase = organizePhase;
@@ -519,7 +625,7 @@ cancelBtn?.addEventListener('click', async () => {
     setOrganizeIdle();
     lastLlmCallsAttempted = 0;
     lastClassified = 0;
-    organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
+    organizeStatus.textContent = localizeCancelMessage({ llmCallsAttempted: 0 });
     return;
   }
 
@@ -528,14 +634,14 @@ cancelBtn?.addEventListener('click', async () => {
     setOrganizeIdle();
     lastLlmCallsAttempted = 0;
     lastClassified = 0;
-    organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
+    organizeStatus.textContent = localizeCancelMessage({ llmCallsAttempted: 0 });
     sendToBackground(MSG.CANCEL_GROUP, { clientRunId: cancelledRunId }).catch(() => {});
     return;
   }
 
   if (phase === 'running' || phase === 'cancelling') {
     organizePhase = 'cancelling';
-    organizeStatus.textContent = 'Cancelling…';
+    organizeStatus.textContent = tt('organize.cancelling');
     const jobIdToCancel = activeJobId || knownAlarmJobId;
     const cancelRes = await sendToBackground(MSG.CANCEL_GROUP, {
       clientRunId: cancelledRunId,
@@ -549,7 +655,7 @@ cancelBtn?.addEventListener('click', async () => {
     }
     // Organize click handler will refine copy from the cancelled job result when it returns;
     // show best-known progress counts immediately (never invent "no LLM" if we saw calls).
-    organizeStatus.textContent = formatOrganizeCancelMessage({
+    organizeStatus.textContent = localizeCancelMessage({
       llmCallsAttempted: lastLlmCallsAttempted,
       classified: lastClassified,
     });
@@ -558,7 +664,7 @@ cancelBtn?.addEventListener('click', async () => {
   }
 
   setOrganizeIdle();
-  organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
+  organizeStatus.textContent = localizeCancelMessage({ llmCallsAttempted: 0 });
 });
 
 onBackgroundBroadcast((message) => {
@@ -610,19 +716,17 @@ onBackgroundBroadcast((message) => {
     lastClassified = message.classified;
   }
   if (message.phase === 'cancelled') {
-    organizeStatus.textContent =
-      typeof message.message === 'string'
-        ? message.message
-        : formatOrganizeCancelMessage({
-            llmCallsAttempted: lastLlmCallsAttempted,
-            classified: lastClassified,
-          });
+    organizeStatus.textContent = localizeCancelMessage({
+      llmCallsAttempted: lastLlmCallsAttempted,
+      classified: lastClassified,
+    });
     return;
   }
   // Suppress stale "Done" if user already cancelled.
   if (organizePhase === 'cancelling') return;
-  if (typeof message.message === 'string') {
-    organizeStatus.textContent = message.message;
+  const progressText = formatProgressMessage(message);
+  if (progressText) {
+    organizeStatus.textContent = progressText;
   }
   if (message.phase && message.phase !== 'done' && message.phase !== 'cancelled') {
     setOrganizeProgressVisible(true);
@@ -636,14 +740,18 @@ function renderLogicalTopics(logical) {
   const list = document.getElementById('topics-list');
   if (!list) return;
   if (!logical.length) {
-    list.innerHTML = '<li class="sp-muted">No topics yet — run Organize.</li>';
+    list.innerHTML = `<li class="sp-muted">${escapeHtml(tt('topics.empty'))}</li>`;
     return;
   }
   list.innerHTML = logical
-    .map(
-      (t) =>
-        `<li><strong>${escapeHtml(t.label || t.topicKey)}</strong> · ${t.tabIds?.length ?? 0} tabs · windows ${(t.windowIds || []).join(', ') || '—'}</li>`,
-    )
+    .map((topic) => {
+      const label = escapeHtml(topic.label || topic.topicKey);
+      const tabs = topic.tabIds?.length ?? 0;
+      const windows = escapeHtml((topic.windowIds || []).join(', ') || '—');
+      return `<li><strong>${label}</strong>${escapeHtml(
+        tt('topics.meta', { tabs, windows: '«W»' }),
+      ).replace('«W»', windows)}</li>`;
+    })
     .join('');
 }
 
@@ -680,7 +788,7 @@ function renderSearchResults(res, query, fail = null) {
   if (!query) {
     flatSearchHits = [];
     activeSearchIndex = -1;
-    searchResults.innerHTML = '<p class="sp-muted">Type to search Open tabs and Stacked records.</p>';
+    searchResults.innerHTML = `<p class="sp-muted">${escapeHtml(tt('search.emptyPrompt'))}</p>`;
     return;
   }
 
@@ -690,7 +798,9 @@ function renderSearchResults(res, query, fail = null) {
     flatSearchHits = [];
     activeSearchIndex = -1;
     const msg = transportError || workerError;
-    searchResults.innerHTML = `<p class="sp-muted">Search error: ${escapeHtml(String(msg))}</p>`;
+    searchResults.innerHTML = `<p class="sp-muted">${escapeHtml(
+      tt('search.error', { msg: String(msg) }),
+    )}</p>`;
     setSearchStatus(String(msg));
     return;
   }
@@ -701,26 +811,29 @@ function renderSearchResults(res, query, fail = null) {
   activeSearchIndex = flatSearchHits.length ? 0 : -1;
 
   if (!flatSearchHits.length) {
-    searchResults.innerHTML = `<p class="sp-muted">No matches for “${escapeHtml(query)}”.</p>`;
+    searchResults.innerHTML = `<p class="sp-muted">${escapeHtml(
+      tt('search.noMatches', { query }),
+    )}</p>`;
     return;
   }
 
   const parts = [];
-  parts.push(renderSearchPartition('Open', open, 0));
-  parts.push(renderSearchPartition('Stacked', stacked, open.length));
+  parts.push(renderSearchPartition('open', open, 0));
+  parts.push(renderSearchPartition('stacked', stacked, open.length));
   searchResults.innerHTML = parts.join('');
   syncSearchActiveClass();
 }
 
 /**
- * @param {string} label
+ * @param {'open' | 'stacked'} partition
  * @param {object[]} hits
  * @param {number} indexOffset
  */
-function renderSearchPartition(label, hits, indexOffset) {
+function renderSearchPartition(partition, hits, indexOffset) {
+  const label = partition === 'stacked' ? tt('search.stacked') : tt('search.open');
   if (!hits.length) {
     const empty =
-      label === 'Stacked' ? 'No stacked matches.' : 'No open-tab matches.';
+      partition === 'stacked' ? tt('search.noStacked') : tt('search.noOpen');
     return `<div class="sp-search-section"><h3 class="sp-search-heading">${escapeHtml(
       label,
     )}</h3><p class="sp-muted">${escapeHtml(empty)}</p></div>`;
@@ -730,7 +843,7 @@ function renderSearchPartition(label, hits, indexOffset) {
       const flatIndex = indexOffset + i;
       const meta = [hit.topicLabel, hit.url].filter(Boolean).join(' · ');
       return `<button type="button" class="sp-search-item" role="option" data-flat-index="${flatIndex}" id="search-hit-${flatIndex}">
-        <span class="sp-search-title">${escapeHtml(hit.title || hit.url || '(untitled)')}</span>
+        <span class="sp-search-title">${escapeHtml(hit.title || hit.url || tt('stacks.untitled'))}</span>
         <span class="sp-search-meta">${escapeHtml(meta)}</span>
       </button>`;
     })
@@ -767,7 +880,11 @@ async function activateSearchHit(hit) {
       ok: false,
       error: String(err),
     }));
-    setSearchStatus(res?.ok ? `Focused: ${hit.title || hit.url}` : res?.error || 'Activate failed');
+    setSearchStatus(
+      res?.ok
+        ? tt('search.focused', { title: hit.title || hit.url || '' })
+        : res?.error || tt('search.activateFailed'),
+    );
     return;
   }
   if (hit.partition === 'stacked' && hit.stackId) {
@@ -777,13 +894,16 @@ async function activateSearchHit(hit) {
     }));
     setSearchStatus(
       res?.ok
-        ? `Recalled: ${hit.title || hit.url}${res.groupRestore?.restored ? ' (group restored)' : ''}`
-        : res?.error || 'Recall failed',
+        ? tt('search.recalled', {
+            title: hit.title || hit.url || '',
+            group: res.groupRestore?.restored ? tt('search.groupRestored') : '',
+          })
+        : res?.error || tt('search.recallFailed'),
     );
     if (res?.ok) refreshStacks();
     return;
   }
-  setSearchStatus('Nothing to activate.');
+  setSearchStatus(tt('search.nothing'));
 }
 
 searchResults?.addEventListener('click', (e) => {
@@ -869,10 +989,13 @@ function showStacksOverflow(pending) {
     const blocked = Number(pending.blocked) || 0;
     const freeHint =
       excess > 0 && blocked === 0
-        ? `Archive over capacity by ${excess} (${count}/${max}). Export or discard oldest to get back within the limit.`
-        : `Archive at capacity (${count}/${max}). Choose export or discard to free space${
-            blocked > 0 ? ` for ${blocked} more reclaim(s)` : ''
-          }. Reclaim is paused until then.`;
+        ? tt('stacks.overflowExcess', { excess, count, max })
+        : tt('stacks.overflowBlocked', {
+            count,
+            max,
+            blockedNote:
+              blocked > 0 ? tt('stacks.blockedNote', { n: blocked }) : '',
+          });
     summary.textContent = freeHint;
   }
 }
@@ -899,13 +1022,15 @@ function downloadStacksExport(json) {
 }
 
 async function resolveStacksOverflow(action) {
-  setStacksStatus(action === 'export' ? 'Exporting…' : 'Discarding oldest…');
+  setStacksStatus(
+    action === 'export' ? tt('stacks.exporting') : tt('stacks.discarding'),
+  );
   const res = await sendToBackground(MSG.EXPORT_OR_DISCARD_STACKS, { action }).catch((err) => ({
     ok: false,
     error: String(err),
   }));
   if (!res?.ok) {
-    setStacksStatus(res?.error || 'Overflow action failed');
+    setStacksStatus(res?.error || tt('stacks.overflowFail'));
     return;
   }
   if (action === 'export' && typeof res.exportJson === 'string') {
@@ -914,8 +1039,8 @@ async function resolveStacksOverflow(action) {
   showStacksOverflow(null);
   setStacksStatus(
     action === 'export'
-      ? `Exported and freed ${res.discarded ?? 0} oldest record(s).`
-      : `Discarded ${res.discarded ?? 0} oldest record(s).`,
+      ? tt('stacks.exported', { n: res.discarded ?? 0 })
+      : tt('stacks.discarded', { n: res.discarded ?? 0 }),
   );
   await refreshStacks();
 }
@@ -934,8 +1059,11 @@ async function recallStackById(stackId, title) {
   }));
   setStacksStatus(
     res?.ok
-      ? `Recalled: ${title || stackId}${res.groupRestore?.restored ? ' (group restored)' : ''}`
-      : res?.error || 'Recall failed',
+      ? tt('stacks.recalled', {
+          title: title || stackId,
+          group: res.groupRestore?.restored ? tt('search.groupRestored') : '',
+        })
+      : res?.error || tt('stacks.recallFailed'),
   );
   if (res?.ok) await refreshStacks();
 }
@@ -984,9 +1112,9 @@ function renderStackCard(stack) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'sp-stack-card';
-  btn.setAttribute('role', 'listitem');
+  // Keep native button semantics — do not override with role=listitem.
   btn.dataset.stackId = String(stack.id || '');
-  btn.title = 'Recall this stacked tab';
+  btn.title = tt('stacks.recallTitle');
 
   const iconUrl = resolveStackIconUrl(stack);
   const img = document.createElement('img');
@@ -1016,10 +1144,10 @@ function renderStackCard(stack) {
   text.className = 'sp-stack-text';
   const title = document.createElement('span');
   title.className = 'sp-stack-title';
-  title.textContent = stack.title || stack.url || '(untitled)';
+  title.textContent = stack.title || stack.url || tt('stacks.untitled');
   const topic = document.createElement('span');
   topic.className = 'sp-stack-topic';
-  topic.textContent = stack.topicLabel || stack.groupTitle || 'No topic';
+  topic.textContent = stack.topicLabel || stack.groupTitle || tt('stacks.noTopic');
   text.append(title, topic);
 
   btn.append(img, fallback, text);
@@ -1051,8 +1179,7 @@ function showStacksEmpty() {
   stacksViewport.replaceChildren();
   const empty = document.createElement('p');
   empty.className = 'sp-muted sp-stacks-empty';
-  empty.textContent =
-    'No stacked tabs yet — excess from Organize (and auto-reclaim) lands here.';
+  empty.textContent = tt('stacks.empty');
   stacksViewport.append(empty);
 }
 
@@ -1093,30 +1220,39 @@ function escapeHtml(s) {
 
 // Keep Organize disabled until config hydrate completes (or fails recoverably).
 syncOrganizeEnabled();
+applyLocale(uiLocale);
 if (organizeStatus && !organizeConfigReady) {
-  organizeStatus.textContent = 'Loading settings…';
+  organizeStatus.textContent = tt('organize.loadingSettings');
 }
+
+localeSelect?.addEventListener('change', () => {
+  applyLocale(localeSelect.value, { persist: true });
+  // Re-render dynamic lists so empty/help copy matches the new locale.
+  refreshLogicalTopics();
+  refreshStacks();
+});
 
 chrome.storage?.onChanged?.addListener((changes, area) => {
   if (area !== 'local' || !changes?.[STORAGE_KEYS.CONFIG]) return;
-  rememberOrganizeConfig(changes[STORAGE_KEYS.CONFIG].newValue || {});
+  const next = changes[STORAGE_KEYS.CONFIG].newValue || {};
+  rememberOrganizeConfig(next);
   organizeConfigReady = true;
   organizeConfigLoadFailed = false;
   syncOrganizeEnabled();
+  if (typeof next.uiLocale === 'string') {
+    applyLocale(next.uiLocale);
+  }
 });
 
 refreshStacks();
 refreshLogicalTopics();
 void refreshCachedOrganizeConfig().then(() => {
+  applyLocale(uiLocale);
   if (!organizeBusy && organizePhase === 'idle' && organizeStatus) {
     if (!organizeConfigReady) {
-      organizeStatus.textContent =
-        'Could not load settings. Click Organize to retry.';
-    } else if (
-      organizeStatus.textContent === 'Loading settings…' ||
-      !organizeStatus.textContent
-    ) {
-      organizeStatus.textContent = ORGANIZE_READY_STATUS;
+      organizeStatus.textContent = tt('organize.settingsRetry');
+    } else {
+      organizeStatus.textContent = tt('organize.ready');
     }
   }
 });
