@@ -125,6 +125,9 @@ export function mergeTopicResult(result, registry) {
 /**
  * Heuristic synonym pairs for common English near-duplicates (no LLM required).
  * Used as a soft assist when merging labels across a batch.
+ * Exact match + light plural/singular only — do NOT treat parent prefixes
+ * (e.g. "Open Source" / "Shopping") as synonyms of domain child seeds
+ * ("Open Source · AI / Agents", "Shopping & Life").
  * @param {string} a
  * @param {string} b
  * @returns {boolean}
@@ -138,9 +141,5 @@ export function heuristicTopicsAreSynonyms(a, b) {
   if (ka + 's' === kb || kb + 's' === ka) return true;
   if (ka.endsWith('ies') && kb === ka.slice(0, -3) + 'y') return true;
   if (kb.endsWith('ies') && ka === kb.slice(0, -3) + 'y') return true;
-  // Prefix containment for short shared stems (min length guard)
-  const shorter = ka.length <= kb.length ? ka : kb;
-  const longer = ka.length <= kb.length ? kb : ka;
-  if (shorter.length >= 8 && longer.startsWith(shorter + ' ')) return true;
   return false;
 }

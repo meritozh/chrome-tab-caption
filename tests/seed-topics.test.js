@@ -7,6 +7,7 @@ import {
   normalizeSeedTopics,
   seedTopicsToText,
 } from '../shared/seed-topics.js';
+import { heuristicTopicsAreSynonyms } from '../shared/topic-normalize.js';
 
 describe('seed topics', () => {
   it('defaults to English domain taxonomy (no Other)', () => {
@@ -74,5 +75,32 @@ describe('seed topics', () => {
       seedTopicsToText(['Video', 'Shopping & Life']),
       'Video\nShopping & Life',
     );
+  });
+
+  it('default seeds stay distinct from each other and from parent prefixes', () => {
+    const parents = [
+      'Open Source',
+      'Reading',
+      'Shopping',
+      'Social',
+      'Video',
+    ];
+    for (let i = 0; i < DEFAULT_SEED_TOPICS.length; i++) {
+      for (let j = i + 1; j < DEFAULT_SEED_TOPICS.length; j++) {
+        assert.equal(
+          heuristicTopicsAreSynonyms(DEFAULT_SEED_TOPICS[i], DEFAULT_SEED_TOPICS[j]),
+          false,
+          `${DEFAULT_SEED_TOPICS[i]} vs ${DEFAULT_SEED_TOPICS[j]}`,
+        );
+      }
+      for (const parent of parents) {
+        if (parent === DEFAULT_SEED_TOPICS[i]) continue;
+        assert.equal(
+          heuristicTopicsAreSynonyms(parent, DEFAULT_SEED_TOPICS[i]),
+          false,
+          `${parent} vs ${DEFAULT_SEED_TOPICS[i]}`,
+        );
+      }
+    }
   });
 });

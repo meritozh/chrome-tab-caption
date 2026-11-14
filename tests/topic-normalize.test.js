@@ -65,4 +65,30 @@ describe('topic normalize + synonym merge', () => {
     assert.equal(heuristicTopicsAreSynonyms('Blog Post', 'Blog Posts'), true);
     assert.equal(heuristicTopicsAreSynonyms('Cats', 'Dogs'), false);
   });
+
+  it('does not collapse domain-prefixed seeds into parent prefixes', () => {
+    assert.equal(
+      heuristicTopicsAreSynonyms('Open Source', 'Open Source · AI / Agents'),
+      false,
+    );
+    assert.equal(
+      heuristicTopicsAreSynonyms(
+        'Open Source · AI / Agents',
+        'Open Source · Frontend / Web',
+      ),
+      false,
+    );
+    assert.equal(
+      heuristicTopicsAreSynonyms('Shopping', 'Shopping & Life'),
+      false,
+    );
+    assert.equal(
+      heuristicTopicsAreSynonyms('Reading', 'Reading · Infrastructure'),
+      false,
+    );
+    assert.equal(
+      heuristicTopicsAreSynonyms('Social', 'Social & Messaging'),
+      false,
+    );
+  });
 });
