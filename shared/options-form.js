@@ -5,6 +5,7 @@
 
 import { DEFAULT_CONFIG } from './constants.js';
 import { API_KEY_REDACTED, isApiKeyUnchanged } from './config.js';
+import { normalizeSeedTopics, seedTopicsToText } from './seed-topics.js';
 
 /** Editable config field ids (same as Side Panel Settings table). */
 export const CONFIG_FORM_FIELDS = Object.freeze([
@@ -14,6 +15,7 @@ export const CONFIG_FORM_FIELDS = Object.freeze([
   'model',
   'maxOpenTabs',
   'topicCacheSize',
+  'seedTopics',
   'autoDedupeEnabled',
   'dedupeMode',
   'contentExtractionEnabled',
@@ -36,12 +38,18 @@ function byId(root, id) {
  */
 export function fillConfigForm(root, config) {
   for (const name of CONFIG_FORM_FIELDS) {
-    const el = /** @type {HTMLInputElement | HTMLSelectElement | null} */ (byId(root, name));
+    const el = /** @type {HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null} */ (
+      byId(root, name)
+    );
     if (!el) continue;
     let value = config[name] ?? DEFAULT_CONFIG[name] ?? '';
     // Never put the redacted sentinel into the password field (would wipe on Save).
     if (name === 'apiKey' && isApiKeyUnchanged(value)) {
       value = '';
+    }
+    if (name === 'seedTopics') {
+      el.value = seedTopicsToText(value);
+      continue;
     }
     if ('type' in el && el.type === 'checkbox') {
       /** @type {HTMLInputElement} */ (el).checked = Boolean(value);
@@ -66,12 +74,19 @@ export function readConfigForm(root) {
     groupOnDemandOnly: true,
   };
   for (const name of CONFIG_FORM_FIELDS) {
-    const el = /** @type {HTMLInputElement | HTMLSelectElement | null} */ (byId(root, name));
+    const el = /** @type {HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null} */ (
+      byId(root, name)
+    );
     if (!el) continue;
     if (name === 'apiKey') {
       // Omit empty / redacted so SET_CONFIG preserves the stored secret.
       if (isApiKeyUnchanged(el.value)) continue;
       patch.apiKey = el.value;
+      continue;
+    }
+    if (name === 'seedTopics') {
+      // Allow empty list (user cleared seeds); do not fall back to defaults here.
+      patch.seedTopics = normalizeSeedTopics(String(el.value ?? '').split(/\r?\n/));
       continue;
     }
     if ('type' in el && el.type === 'checkbox') {

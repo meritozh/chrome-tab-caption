@@ -22,10 +22,15 @@ function makeRoot(values = {}) {
           ? 'select'
           : name === 'apiKey'
             ? 'password'
-            : ['maxOpenTabs', 'topicCacheSize', 'dailyLlmQuota'].includes(name)
-              ? 'number'
-              : 'text';
-    const def = values[name] ?? DEFAULT_CONFIG[name] ?? '';
+            : name === 'seedTopics'
+              ? 'textarea'
+              : ['maxOpenTabs', 'topicCacheSize', 'dailyLlmQuota'].includes(name)
+                ? 'number'
+                : 'text';
+    let def = values[name] ?? DEFAULT_CONFIG[name] ?? '';
+    if (name === 'seedTopics' && Array.isArray(def)) {
+      def = def.join('\n');
+    }
     if (type === 'checkbox') {
       els.set(name, { type, checked: Boolean(def), value: '' });
     } else {
@@ -46,9 +51,22 @@ describe('options-form helpers', () => {
     assert.ok(CONFIG_FORM_FIELDS.includes('llmProvider'));
     assert.ok(CONFIG_FORM_FIELDS.includes('maxOpenTabs'));
     assert.ok(CONFIG_FORM_FIELDS.includes('topicCacheSize'));
+    assert.ok(CONFIG_FORM_FIELDS.includes('seedTopics'));
     assert.equal(CONFIG_FORM_FIELDS.includes('cacheSize'), false);
     assert.equal(CONFIG_FORM_FIELDS.includes('stackSize'), false);
     assert.ok(CONFIG_FORM_FIELDS.includes('dailyLlmQuota'));
+  });
+
+  it('reads seedTopics textarea as normalized array', () => {
+    const root = makeRoot({
+      seedTopics: '视频\n\n购物与生活\n开源 · AI / Agents',
+    });
+    const patch = readConfigForm(root);
+    assert.deepEqual(patch.seedTopics, [
+      '视频',
+      '购物与生活',
+      '开源 · AI / Agents',
+    ]);
   });
 
   it('readConfigForm omits empty apiKey and coerces blank thresholds', () => {

@@ -15,9 +15,29 @@ describe('topic normalize + synonym merge', () => {
     assert.equal(normalizeTopicKey("OpenAI's API"), 'openais api');
   });
 
+  it('keeps CJK seed labels distinct in keys', () => {
+    assert.equal(
+      normalizeTopicKey('开源 · AI / Agents'),
+      '开源 ai agents',
+    );
+    assert.equal(
+      normalizeTopicKey('阅读 · AI / Agents'),
+      '阅读 ai agents',
+    );
+    assert.notEqual(
+      normalizeTopicKey('开源 · AI / Agents'),
+      normalizeTopicKey('阅读 · AI / Agents'),
+    );
+  });
+
   it('formats English display labels', () => {
     assert.equal(formatTopicLabel('machine learning'), 'Machine Learning');
     assert.equal(formatTopicLabel('guides for react'), 'Guides for React');
+  });
+
+  it('preserves CJK seed labels and English acronyms', () => {
+    assert.equal(formatTopicLabel('开源 · AI / Agents'), '开源 · AI / Agents');
+    assert.equal(formatTopicLabel('AI Agents'), 'AI Agents');
   });
 
   it('merges synonyms into the same normalizedKey', () => {

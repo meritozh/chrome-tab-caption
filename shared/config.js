@@ -3,6 +3,7 @@
  */
 
 import { DEFAULT_CONFIG, STORAGE_KEYS } from './constants.js';
+import { normalizeSeedTopics } from './seed-topics.js';
 
 /** UI-only placeholder — must never be written to chrome.storage.local. */
 export const API_KEY_REDACTED = '••••••••';
@@ -69,6 +70,12 @@ export function mergeConfig(partial) {
     ...src,
     topicCacheSize,
   };
+  // Always normalize seed list (array or textarea lines); empty array = user cleared.
+  next.seedTopics = normalizeSeedTopics(
+    src && Object.prototype.hasOwnProperty.call(src, 'seedTopics')
+      ? src.seedTopics
+      : next.seedTopics,
+  );
   // ADR 2026-11-13: coerce superseded stored value so Organize always merges.
   if (next.groupScope === 'cross-window-logical') {
     next.groupScope = 'single-window-merge';

@@ -244,6 +244,29 @@
               </tr>
 
               <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupTopics">Topics</th>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="seedTopics" data-i18n="settings.seedTopics">Seed topics</label>
+                </th>
+                <td>
+                  <textarea
+                    id="seedTopics"
+                    name="seedTopics"
+                    rows="9"
+                    spellcheck="false"
+                    data-i18n-placeholder="settings.seedTopicsPlaceholder"
+                    placeholder="One topic per line"
+                  ></textarea>
+                  <p class="sp-muted sp-settings-hint" data-i18n="settings.seedTopicsHint">
+                    Domain buckets for Organize / Reorganize. Prefer these (plus existing groups on
+                    Organize); invent when nothing fits — never Other / 其他.
+                  </p>
+                </td>
+              </tr>
+
+              <tr class="sp-settings-group">
                 <th colspan="2" scope="colgroup" data-i18n="settings.groupDedupe">Dedupe</th>
               </tr>
               <tr>
