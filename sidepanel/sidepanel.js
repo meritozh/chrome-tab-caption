@@ -216,6 +216,49 @@ async function getPanelWindowId() {
   }
 }
 
+/**
+ * Cached Options config for Organize click — sync read so permissions.request
+ * can be the first await (Chrome user-gesture requirement; matches Options Test LLM).
+ * @type {{
+ *   llmProvider: string,
+ *   endpointBaseUrl: string,
+ *   hasApiKey: boolean,
+ *   contentExtractionEnabled: boolean,
+ * }}
+ */
+let cachedOrganizeConfig = {
+  llmProvider: '',
+  endpointBaseUrl: '',
+  hasApiKey: false,
+  contentExtractionEnabled: true,
+};
+
+/**
+ * @param {Record<string, unknown> | null | undefined} config
+ */
+function rememberOrganizeConfig(config) {
+  if (!config || typeof config !== 'object') return;
+  const apiKey = config.apiKey;
+  cachedOrganizeConfig = {
+    llmProvider: typeof config.llmProvider === 'string' ? config.llmProvider : '',
+    endpointBaseUrl:
+      typeof config.endpointBaseUrl === 'string' ? config.endpointBaseUrl : '',
+    hasApiKey: Boolean(
+      config.hasApiKey || (typeof apiKey === 'string' && apiKey.length > 0),
+    ),
+    contentExtractionEnabled: config.contentExtractionEnabled !== false,
+  };
+}
+
+function refreshCachedOrganizeConfig() {
+  return sendToBackground(MSG.GET_CONFIG)
+    .then((res) => {
+      rememberOrganizeConfig(res?.config);
+      return cachedOrganizeConfig;
+    })
+    .catch(() => cachedOrganizeConfig);
+}
+
 organizeBtn?.addEventListener('click', async () => {
   if (organizeBusy) return;
   const runId = (organizeRunId = nextOrganizeRunId());
@@ -229,14 +272,12 @@ organizeBtn?.addEventListener('click', async () => {
   setOrganizeProgressVisible(true);
 
   const scope = scopeSelect?.value === 'current' ? 'current' : 'all';
-  const windowId = await getPanelWindowId();
-  if (runId !== organizeRunId) return;
-  const cfg = await sendToBackground(MSG.GET_CONFIG).catch(() => null);
-  if (runId !== organizeRunId) return;
-  const provider = cfg?.config?.llmProvider || '';
-  const hasApiKey = Boolean(cfg?.config?.hasApiKey);
+  // Sync cache read only — FIRST await must be permissions.request (user gesture).
+  const cached = cachedOrganizeConfig;
+  const provider = cached.llmProvider || '';
   const llmReady =
-    hasApiKey && (provider === 'anthropic' || provider === 'openai-responses');
+    cached.hasApiKey &&
+    (provider === 'anthropic' || provider === 'openai-responses');
   if (!llmReady) {
     setOrganizeIdle();
     organizeStatus.textContent =
@@ -244,12 +285,10 @@ organizeBtn?.addEventListener('click', async () => {
     return;
   }
 
-  // FIRST await must be permissions.request to preserve the click user gesture.
-  // Extract hosts only when content extraction is enabled (optional_host_permissions).
   const allowed = await requestOrganizePermissions({
-    endpointBaseUrl: cfg?.config?.endpointBaseUrl || '',
+    endpointBaseUrl: cached.endpointBaseUrl || '',
     provider,
-    includeExtractHosts: cfg?.config?.contentExtractionEnabled !== false,
+    includeExtractHosts: cached.contentExtractionEnabled !== false,
     includeAllProviderDefaults: true,
   });
 
@@ -262,6 +301,24 @@ organizeBtn?.addEventListener('click', async () => {
     setOrganizeIdle();
     organizeStatus.textContent =
       'Host permission denied. Grant LLM + page access, then Organize again.';
+    return;
+  }
+
+  const windowId = await getPanelWindowId();
+  if (runId !== organizeRunId) return;
+
+  // Refresh config after gesture-safe permission; SW still hard-fails if cleared.
+  const cfg = await sendToBackground(MSG.GET_CONFIG).catch(() => null);
+  if (runId !== organizeRunId) return;
+  rememberOrganizeConfig(cfg?.config);
+  const liveProvider = cfg?.config?.llmProvider || provider;
+  const liveReady =
+    Boolean(cfg?.config?.hasApiKey) &&
+    (liveProvider === 'anthropic' || liveProvider === 'openai-responses');
+  if (!liveReady) {
+    setOrganizeIdle();
+    organizeStatus.textContent =
+      'LLM not configured — open Options and set provider + API key before Organize.';
     return;
   }
 
@@ -283,7 +340,9 @@ organizeBtn?.addEventListener('click', async () => {
   });
 
   if (!stillActive) {
-    // Cancel already updated status; absorb stale completion.
+    // Newer Organize owns the UI — never clear busy/progress for that run.
+    if (organizeBusy || organizePhase !== 'idle') return;
+    // Cancel already idled this panel; refine cancel copy only while still idle.
     if (res?.cancelled) {
       lastLlmCallsAttempted = Number(res.llmCallsAttempted) || lastLlmCallsAttempted;
       lastClassified = Number(res.classified) || lastClassified;
@@ -295,7 +354,6 @@ organizeBtn?.addEventListener('click', async () => {
         renderLogicalTopics(res.logical);
       }
     }
-    setOrganizeIdle();
     return;
   }
 
@@ -408,6 +466,7 @@ onBackgroundBroadcast((message) => {
   if (message.type === MSG.CONFIG_UPDATED) {
     // Always refresh Stacks so a cleared overflow gate hides Export/Discard.
     refreshStacks();
+    refreshCachedOrganizeConfig();
     return;
   }
   if (message.type === MSG.JOB_STATE) {
@@ -827,6 +886,7 @@ function escapeHtml(s) {
 
 refreshStacks();
 refreshLogicalTopics();
+refreshCachedOrganizeConfig();
 // Reopened panel: adopt in-flight alarm resume if SW already has a checkpoint.
 sendToBackground(MSG.GET_JOB_STATE)
   .then((state) => {
