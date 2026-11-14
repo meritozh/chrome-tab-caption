@@ -7,6 +7,7 @@ import {
   isResumablePhase,
   isTerminalPhase,
   remainingRefineItems,
+  hasPendingStackReclassify,
   advancePhase,
   markInterrupted,
   bumpResumeCount,
@@ -41,10 +42,29 @@ describe('organize task state machine', () => {
     assert.equal(cp.clearCache, true);
     assert.equal(cp.bypassCache, true);
     assert.equal(cp.reclassifyStacks, true);
+    assert.equal(hasPendingStackReclassify(cp), true);
     const advanced = advancePhase(cp, JOB_PHASES.REFINE, { stacksDone: true });
     assert.equal(advanced.reorganize, true);
     assert.equal(advanced.reclassifyStacks, true);
     assert.equal(advanced.stacksDone, true);
+    assert.equal(hasPendingStackReclassify(advanced), false);
+  });
+
+  it('summarizes stacks-pending resume when refine queue is empty', () => {
+    const cp = createOrganizeCheckpoint({
+      jobId: 'reorg-2',
+      phase: JOB_PHASES.REFINE,
+      reorganize: true,
+      refineQueue: [],
+      refineIndex: 0,
+      stacksDone: false,
+      resumeCount: 1,
+    });
+    const summary = summarizeJobState(cp);
+    assert.equal(summary.remaining, 0);
+    assert.equal(summary.stacksPending, true);
+    assert.equal(summary.resumable, true);
+    assert.equal(summary.alarmResume, true);
   });
 
   it('classifies resumable vs terminal phases', () => {

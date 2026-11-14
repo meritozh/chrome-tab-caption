@@ -16,6 +16,7 @@ import {
   saveOrganizeCheckpoint,
   interruptOrganizeCheckpoint,
   shouldResumeCheckpoint,
+  remainingRefineItems,
 } from '../background/job-checkpoint.js';
 import { SESSION_KEYS } from '../shared/constants.js';
 
@@ -130,5 +131,26 @@ describe('organize checkpoint persistence', () => {
       refineQueue: [{ tabId: 1, windowId: 1, url: 'u', title: 't', urlKey: 'u', contentHash: 'h' }],
     });
     assert.equal(shouldResumeCheckpoint(ancient), false);
+  });
+
+  it('resumes when refine is empty but stack reclassify is still pending', () => {
+    const stacksPending = createOrganizeCheckpoint({
+      jobId: 'reorg-stacks',
+      phase: JOB_PHASES.REFINE,
+      reorganize: true,
+      refineQueue: [
+        { tabId: 1, windowId: 1, url: 'u', title: 't', urlKey: 'u', contentHash: 'h' },
+      ],
+      refineIndex: 1, // all tabs classified
+      stacksDone: false,
+    });
+    assert.equal(remainingRefineItems(stacksPending).length, 0);
+    assert.equal(shouldResumeCheckpoint(stacksPending), true);
+
+    const stacksDone = createOrganizeCheckpoint({
+      ...stacksPending,
+      stacksDone: true,
+    });
+    assert.equal(shouldResumeCheckpoint(stacksDone), false);
   });
 });

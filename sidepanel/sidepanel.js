@@ -25,9 +25,19 @@ function tt(key, params = null) {
 }
 
 /**
+ * Nested i18n param: resolved at render time so locale switch re-translates fragments.
+ * @typedef {{ key: string, params?: Record<string, string | number | OrganizeStatusI18nParam> | null }} OrganizeStatusI18nParam
+ */
+
+/**
  * Live status is NOT driven by data-i18n — store key/params (or raw) and re-render
  * on locale change so hydrate/locale switch cannot clobber in-flight copy.
- * @type {{ key: string | null, params: Record<string, string | number> | null, raw: string | null }}
+ * Nested params may be `{ key, params }` for cancel/done fragments.
+ * @type {{
+ *   key: string | null,
+ *   params: Record<string, string | number | OrganizeStatusI18nParam> | null,
+ *   raw: string | null,
+ * }}
  */
 let organizeStatusState = { key: 'organize.ready', params: null, raw: null };
 
@@ -46,8 +56,12 @@ function renderOrganizeStatus() {
 }
 
 /**
- * @param {string | { key?: string, params?: Record<string, string | number> | null, raw?: string | null }} keyOrState
- * @param {Record<string, string | number> | null} [params]
+ * @param {string | {
+ *   key?: string,
+ *   params?: Record<string, string | number | OrganizeStatusI18nParam> | null,
+ *   raw?: string | null,
+ * }} keyOrState
+ * @param {Record<string, string | number | OrganizeStatusI18nParam> | null} [params]
  */
 function setOrganizeStatus(keyOrState, params = null) {
   if (typeof keyOrState === 'string') {
@@ -76,9 +90,13 @@ function localizeCancelMessage({ llmCallsAttempted = 0, classified = 0 } = {}) {
     key: 'organize.cancelWithLlm',
     params: {
       attempted,
-      callWord: attempted === 1 ? tt('organize.call') : tt('organize.calls'),
+      callWord: {
+        key: attempted === 1 ? 'organize.call' : 'organize.calls',
+      },
       classifiedNote:
-        classifiedN > 0 ? tt('organize.classifiedNote', { n: classifiedN }) : '',
+        classifiedN > 0
+          ? { key: 'organize.classifiedNote', params: { n: classifiedN } }
+          : '',
     },
   };
 }
@@ -338,18 +356,22 @@ function adoptAlarmResumeState(state) {
 
 /**
  * End an adopted alarm-resume UI without inventing a success string.
- * Keeps GROUP_PROGRESS copy when present; only replaces placeholder resume text.
+ * Keeps GROUP_PROGRESS / timeout / quota raw copy; only replaces placeholder resume text.
  */
 function endAdoptedAlarmResumeUi() {
   const status = organizeStatus?.textContent || '';
+  const raw = organizeStatusState.raw || '';
   const key = organizeStatusState.key;
-  if (
+  const isResumePlaceholder =
     status.startsWith('Alarm resume') ||
     status.startsWith('Resuming Organize') ||
+    raw.startsWith('Alarm resume') ||
+    raw.startsWith('Resuming Organize');
+  if (
+    isResumePlaceholder ||
     key === 'organize.busy' ||
     key === 'organize.reorganizing' ||
-    key === 'organize.cancelling' ||
-    organizeStatusState.raw
+    key === 'organize.cancelling'
   ) {
     setOrganizeStatus('organize.ended');
   }
@@ -648,6 +670,17 @@ async function startOrganizeJob(mode = 'organize') {
             }
           : { key: 'organize.permissionRetry', params: null },
       );
+    } else if (res?.timeout || res?.stacksPending) {
+      // Partial apply kept; alarm will resume remaining stack reclassify.
+      setOrganizeStatus(
+        res.error
+          ? { raw: String(res.error) }
+          : { key: 'organize.ended', params: null },
+      );
+      if (Array.isArray(res.logical) && res.logical.length) {
+        renderLogicalTopics(res.logical);
+      }
+      if (reorganize) refreshStacks();
     } else {
       setOrganizeStatus(
         res?.error
@@ -662,15 +695,15 @@ async function startOrganizeJob(mode = 'organize') {
   const topics = res.logical?.length ?? 0;
   const applied = res.physical?.applied ?? 0;
   const reclaimed = Number(res.merge?.reclaimed) || 0;
-  const merged =
-    res.merge?.targetWindowId != null ? tt('organize.merged') : '';
-  const stacked =
-    reclaimed > 0 ? tt('organize.stacked', { n: reclaimed }) : '';
   setOrganizeStatus('organize.done', {
     topics,
     applied,
-    merged,
-    stacked,
+    merged:
+      res.merge?.targetWindowId != null ? { key: 'organize.merged' } : '',
+    stacked:
+      reclaimed > 0
+        ? { key: 'organize.stacked', params: { n: reclaimed } }
+        : '',
     classified: res.classified ?? 0,
   });
   renderLogicalTopics(res.logical || []);

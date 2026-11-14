@@ -996,6 +996,8 @@ export async function groupTabsOnDemand(opts) {
   // Reorganize: refresh topics on every Stack record (title/url classify; no live tab extract).
   // Also runs after alarm resume when checkpoint kept reclassifyStacks / reorganize.
   let stacksReclassified = 0;
+  /** Deadline cut stack pass short — apply tabs, then leave checkpoint resumable. */
+  let stacksIncomplete = false;
   if (reclassifyStacks && opts.stackStore && !stacksDone) {
     const stackResult = await reclassifyAllStacks({
       stackStore: opts.stackStore,
@@ -1032,11 +1034,31 @@ export async function groupTabsOnDemand(opts) {
     }
     stacksReclassified = stackResult.reclassified || 0;
     client = stackResult.client ?? client;
-    stacksDone = true;
-    await emitCheckpoint(
-      onCheckpoint,
-      snapshotCheckpoint(JOB_PHASES.REFINE, { total, stacksDone: true }),
-    );
+    // Only mark stacksDone when the loop finished every record — never after a
+    // deadline-partial pass (alarm resume must continue remaining stacks).
+    if (stackResult.complete) {
+      stacksDone = true;
+      await emitCheckpoint(
+        onCheckpoint,
+        snapshotCheckpoint(JOB_PHASES.REFINE, { total, stacksDone: true }),
+      );
+    } else {
+      stacksIncomplete = true;
+      stacksDone = false;
+      await emitCheckpoint(
+        onCheckpoint,
+        snapshotCheckpoint(JOB_PHASES.REFINE, { total, stacksDone: false }),
+      );
+      broadcastProgress({
+        jobId,
+        phase: 'timeout',
+        done: assignments.length,
+        total,
+        message: 'Organize budget exhausted during stack reclassify — will resume.',
+        llmCallsAttempted,
+        classified,
+      });
+    }
   }
 
   await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.APPLYING, { total }));
@@ -1101,6 +1123,50 @@ export async function groupTabsOnDemand(opts) {
   const logical = buildLogicalTopicViews(finalAssignments);
 
   await persistTopicCache(topicCache);
+
+  // Partial stack reclassify: keep a resumable checkpoint (do not clear via ok:true).
+  if (stacksIncomplete) {
+    await emitCheckpoint(
+      onCheckpoint,
+      snapshotCheckpoint(JOB_PHASES.INTERRUPTED, { total, stacksDone: false }),
+    );
+    broadcastProgress({
+      jobId,
+      phase: 'timeout',
+      done: assignments.length,
+      total,
+      applied: physical.applied,
+      classified,
+      classifyErrors,
+      llmCallsAttempted,
+      resumeCount,
+      reclaimed: merge?.reclaimed ?? 0,
+      targetWindowId: merge?.targetWindowId ?? null,
+      message: 'Organize budget exhausted — stack reclassify will resume.',
+    });
+    return {
+      ok: false,
+      timeout: true,
+      stacksPending: true,
+      stub: false,
+      jobId,
+      scope,
+      logical,
+      assignments: finalAssignments,
+      physical,
+      merge,
+      classified,
+      classifyErrors,
+      llmCallsAttempted,
+      resumeCount,
+      stacksReclassified,
+      reorganize: reorganize || undefined,
+      cacheSize: topicCache.size,
+      latestWinsAt: Date.now(),
+      latestWinsSource: reorganize ? 'extension-reorganize' : 'extension-organize',
+    };
+  }
+
   await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.DONE, { total }));
 
   broadcastProgress({
@@ -1152,7 +1218,7 @@ export async function groupTabsOnDemand(opts) {
 async function reclassifyAllStacks(opts) {
   const stacks = opts.stackStore?.list?.() ?? [];
   if (!stacks.length) {
-    return { reclassified: 0, client: opts.client };
+    return { reclassified: 0, client: opts.client, complete: true };
   }
 
   let client = opts.client;
@@ -1221,14 +1287,18 @@ async function reclassifyAllStacks(opts) {
 
   let reclassified = 0;
   const total = stacks.length;
+  let complete = true;
 
   for (let i = 0; i < stacks.length; i++) {
     const cancelled = checkCancel();
     if (!cancelled.continue) {
       await persistStackRecords(opts.stackStore);
-      return { cancelled: cancelled.result, reclassified, client };
+      return { cancelled: cancelled.result, reclassified, client, complete: false };
     }
-    if (deadline.expired()) break;
+    if (deadline.expired()) {
+      complete = false;
+      break;
+    }
 
     const stack = stacks[i];
     broadcastProgress({
@@ -1317,7 +1387,7 @@ async function reclassifyAllStacks(opts) {
 
   await persistStackRecords(opts.stackStore);
   await persistTopicCache(topicCache);
-  return { reclassified, client };
+  return { reclassified, client, complete };
 }
 
 export { TAB_GROUP_ID_NONE };

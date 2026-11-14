@@ -8,6 +8,7 @@ import {
   isResumablePhase,
   markInterrupted,
   remainingRefineItems,
+  hasPendingStackReclassify,
   summarizeJobState,
 } from '../shared/task-state.js';
 
@@ -61,6 +62,8 @@ export async function interruptOrganizeCheckpoint(storage = globalThis.chrome?.s
 
 /**
  * Whether a stored checkpoint should be resumed by alarm / SW start.
+ * Resume when refine tabs remain **or** Reorganize still needs stack reclassify
+ * (`reclassifyStacks && !stacksDone`) — even if the refine queue is empty.
  * @param {import('../shared/task-state.js').OrganizeCheckpoint | null | undefined} checkpoint
  */
 export function shouldResumeCheckpoint(checkpoint) {
@@ -69,11 +72,13 @@ export function shouldResumeCheckpoint(checkpoint) {
     return false;
   }
   if (!checkpoint.confirmed) return false;
-  if (remainingRefineItems(checkpoint).length <= 0) return false;
+  const refineLeft = remainingRefineItems(checkpoint).length > 0;
+  const stacksLeft = hasPendingStackReclassify(checkpoint);
+  if (!refineLeft && !stacksLeft) return false;
   // Stale deadline — still resume once so partial apply can finish, unless ancient.
   const ageMs = Date.now() - (checkpoint.startedAt || 0);
   if (ageMs > 30 * 60_000) return false;
   return true;
 }
 
-export { summarizeJobState, remainingRefineItems };
+export { summarizeJobState, remainingRefineItems, hasPendingStackReclassify };

@@ -238,9 +238,31 @@ export function normalizeUiLocale(value) {
 }
 
 /**
+ * Nested i18n fragment resolved at render time (locale-switch safe).
+ * @typedef {{ key: string, params?: Record<string, string | number | I18nParamRef> | null }} I18nParamRef
+ */
+
+/**
+ * @param {UiLocale} locale
+ * @param {unknown} value
+ * @returns {string}
+ */
+function resolveParamValue(locale, value) {
+  if (
+    value &&
+    typeof value === 'object' &&
+    typeof /** @type {I18nParamRef} */ (value).key === 'string'
+  ) {
+    const ref = /** @type {I18nParamRef} */ (value);
+    return t(locale, ref.key, ref.params ?? null);
+  }
+  return String(value ?? '');
+}
+
+/**
  * @param {UiLocale | string} locale
  * @param {string} key
- * @param {Record<string, string | number> | null} [params]
+ * @param {Record<string, string | number | I18nParamRef> | null} [params]
  */
 export function t(locale, key, params = null) {
   const loc = normalizeUiLocale(locale);
@@ -248,7 +270,7 @@ export function t(locale, key, params = null) {
   let text = table[key] ?? MESSAGES.en[key] ?? key;
   if (params && typeof params === 'object') {
     for (const [k, v] of Object.entries(params)) {
-      text = text.replaceAll(`{${k}}`, String(v));
+      text = text.replaceAll(`{${k}}`, resolveParamValue(loc, v));
     }
   }
   return text;

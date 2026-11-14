@@ -148,6 +148,15 @@ export function remainingRefineItems(checkpoint) {
 }
 
 /**
+ * Reorganize still owes a stack reclassify pass (or a partial pass to finish).
+ * @param {OrganizeCheckpoint | null | undefined} checkpoint
+ */
+export function hasPendingStackReclassify(checkpoint) {
+  if (!isOrganizeCheckpoint(checkpoint)) return false;
+  return checkpoint.reclassifyStacks === true && checkpoint.stacksDone !== true;
+}
+
+/**
  * @param {OrganizeCheckpoint} checkpoint
  * @param {string} phase
  * @param {Partial<OrganizeCheckpoint>} [patch]
@@ -238,13 +247,16 @@ export function summarizeJobState(checkpoint) {
     };
   }
   const remaining = remainingRefineItems(checkpoint).length;
+  const stacksPending = hasPendingStackReclassify(checkpoint);
   const resumeCount = Math.max(0, Number(checkpoint.resumeCount) || 0);
   return {
     jobId: checkpoint.jobId,
     phase: checkpoint.phase,
     scope: checkpoint.scope,
     clientRunId: checkpoint.clientRunId,
-    resumable: isResumablePhase(checkpoint.phase) && remaining > 0,
+    resumable:
+      isResumablePhase(checkpoint.phase) && (remaining > 0 || stacksPending),
+    stacksPending,
     /**
      * True only for alarm/SW-sleep continuation — not a normal in-progress Organize.
      * Side Panel must adopt UI only when this is set (avoid hijacking an in-flight Organize).
