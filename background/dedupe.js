@@ -101,6 +101,9 @@ async function runAutoDedupeUnlocked(opts = {}) {
   // Probe possible close targets for beforeunload / dirty forms before planning.
   /** @type {Set<number>} */
   const beforeUnloadRiskIds = new Set();
+  /** Tabs whose DOM risk probe already ran (positive or negative). */
+  /** @type {Set<number>} */
+  const probedTabIds = new Set();
   if (probeUnload) {
     const prelim = planAutoCloseOlder(tabs, {
       closingTabIds,
@@ -116,6 +119,7 @@ async function runAutoDedupeUnlocked(opts = {}) {
       }
     }
     for (const id of toProbe) {
+      probedTabIds.add(id);
       if (await probeBeforeUnloadRisk(id, scriptingApi)) {
         beforeUnloadRiskIds.add(id);
       }
@@ -154,6 +158,32 @@ async function runAutoDedupeUnlocked(opts = {}) {
 
   if (!plans.length) {
     return { closed: 0, kept: 0, groups: 0, stub: false };
+  }
+
+  // Issue #10: post-probe re-plan can introduce close targets that were never
+  // probed (former survivor, or a duplicate that appeared during await).
+  // Probe those before the close loop; do not auto-close unprobed dirty tabs.
+  if (probeUnload) {
+    /** @type {Set<number>} */
+    const lateProbe = new Set();
+    for (const plan of plans) {
+      for (const dup of plan.close) {
+        if (
+          typeof dup?.id === 'number' &&
+          !probedTabIds.has(dup.id) &&
+          !beforeUnloadRiskIds.has(dup.id) &&
+          !tabLooksUnsaved(dup)
+        ) {
+          lateProbe.add(dup.id);
+        }
+      }
+    }
+    for (const id of lateProbe) {
+      probedTabIds.add(id);
+      if (await probeBeforeUnloadRisk(id, scriptingApi)) {
+        beforeUnloadRiskIds.add(id);
+      }
+    }
   }
 
   let closed = 0;
