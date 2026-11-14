@@ -9,7 +9,7 @@ Canonical product ADR lives in the Project store (`docs/tab-manager-adr.md`). Th
 3. **URL normalize** — Strip hash + tracking params only; keep other query.
 4. **Topics** — Fine-grained **English** labels; merge synonyms to one `normalizedKey`.
 5. **Auto-group** — **Off**. User click only; manual vs extension writes are **latest-wins**; cache syncs on tab updates.
-6. **Reclaim protection** — Exclude unsaved / `beforeunload` risk; current window may be reclaimed.
+6. **Reclaim protection** — Exclude unsaved / `beforeunload` risk; never reclaim the focused active tab. **maxOpenTabs excess→Stacks reclaim runs only on user Organize / Reorganize** — not on tab create / activate / remove / maintain alarm / config save. (Revised 2026-11-14.)
 7. **Recall** — Restore saved group metadata from StackRecords; prefer topic cache when merging into the live window.
 8. **Content** — Optional meta/snippet; on-demand main-text extract with short excerpt cap; no always-on `content_scripts`.
 9. **Search** — Pinyin + fuzzy; **recency-first**.

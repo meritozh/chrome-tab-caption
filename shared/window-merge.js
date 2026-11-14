@@ -36,21 +36,37 @@ export function sortByLastAccessedDesc(tabs) {
 /**
  * Partition open tabs into keep (top maxOpenTabs by lastAccessed) vs reclaim candidates.
  * Excess that fail reclaim exclusions (pinned / audible / unsaved / beforeunload) stay open.
+ * `protectActiveTabId` is always forced into the keep-set (swap with least-recent kept).
  *
  * @param {Array<{ id?: number, url?: string, title?: string, pinned?: boolean, audible?: boolean, lastAccessed?: number, windowId?: number }>} tabs
  * @param {object} opts
  * @param {number} opts.maxOpenTabs
  * @param {Set<number> | number[] | null} [opts.beforeUnloadRiskIds]
+ * @param {number} [opts.protectActiveTabId]  focused active — never among reclaimTargets
  * @returns {{ kept: typeof tabs, reclaimTargets: typeof tabs, ordered: typeof tabs }}
  */
 export function partitionKeepAndReclaim(tabs, opts) {
   const list = (Array.isArray(tabs) ? tabs : []).filter((t) => typeof t?.id === 'number');
   const max = Math.max(1, Number(opts?.maxOpenTabs) || 50);
-  const ordered = sortByLastAccessedDesc(list);
+  let ordered = sortByLastAccessedDesc(list);
+
+  const protectId =
+    typeof opts?.protectActiveTabId === 'number' ? opts.protectActiveTabId : null;
+  if (protectId != null) {
+    const idx = ordered.findIndex((t) => t.id === protectId);
+    // Force protected tab into the keep slice even when its lastAccessed is stale/old.
+    if (idx >= max) {
+      const [protectedTab] = ordered.splice(idx, 1);
+      ordered = [protectedTab, ...ordered];
+    }
+  }
+
   const kept = ordered.slice(0, max);
   const excess = ordered.slice(max);
-  const reclaimTargets = excess.filter((t) =>
-    isReclaimCandidate(t, { beforeUnloadRiskIds: opts?.beforeUnloadRiskIds }),
+  const reclaimTargets = excess.filter(
+    (t) =>
+      t.id !== protectId &&
+      isReclaimCandidate(t, { beforeUnloadRiskIds: opts?.beforeUnloadRiskIds }),
   );
   return { kept, reclaimTargets, ordered };
 }

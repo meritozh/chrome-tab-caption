@@ -84,14 +84,27 @@ export function groupTabsByNormalizedUrl(tabs, opts = {}) {
  */
 
 /**
+ * Pinned / audible tabs must never be auto-closed (ADR keep priorities).
+ * @param {{ pinned?: boolean, audible?: boolean } | null | undefined} tab
+ */
+export function isDedupeCloseExempt(tab) {
+  return Boolean(tab?.pinned || tab?.audible);
+}
+
+/**
  * Build auto-close-older plans for duplicate groups.
  * Same-window and cross-window exact normalized URLs both qualify (ADR §5.4).
+ * Never closes `protectActiveTabId` (focused window's active tab) — switching
+ * into a duplicate must not vanish the tab the user just selected.
+ * Never closes pinned or audible copies (even when protect overrides the keep).
  * @param {Array<{ id?: number, url?: string, title?: string, active?: boolean, audible?: boolean, pinned?: boolean, lastAccessed?: number, windowId?: number }>} tabs
- * @param {{ closingTabIds?: Set<number> | Iterable<number> | null, stripHash?: boolean, stripTracking?: boolean, beforeUnloadRiskIds?: Set<number> | Iterable<number> | null }} [opts]
+ * @param {{ closingTabIds?: Set<number> | Iterable<number> | null, stripHash?: boolean, stripTracking?: boolean, beforeUnloadRiskIds?: Set<number> | Iterable<number> | null, protectActiveTabId?: number }} [opts]
  * @returns {DedupePlan[]}
  */
 export function planAutoCloseOlder(tabs, opts = {}) {
   const groups = groupTabsByNormalizedUrl(tabs, opts);
+  const protectId =
+    typeof opts.protectActiveTabId === 'number' ? opts.protectActiveTabId : null;
   /** @type {DedupePlan[]} */
   const plans = [];
 
@@ -103,8 +116,21 @@ export function planAutoCloseOlder(tabs, opts = {}) {
       // Stable tie-break: higher id = slightly newer open.
       return (b.id || 0) - (a.id || 0);
     });
-    const keep = ranked[0];
-    const close = ranked.slice(1);
+
+    let keep = ranked[0];
+    if (protectId != null) {
+      const protectedTab = members.find((t) => t.id === protectId);
+      if (protectedTab) keep = protectedTab;
+    }
+
+    // Close older / lower-ranked peers, but never the keep, protect id, pinned, or audible.
+    const close = members.filter(
+      (t) =>
+        t.id !== keep?.id &&
+        t.id !== protectId &&
+        !isDedupeCloseExempt(t),
+    );
+
     if (keep && close.length) {
       plans.push({ urlKey, keep, close });
     }

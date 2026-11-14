@@ -22,6 +22,9 @@ import { colorForTopicKey } from '../shared/physical-groups.js';
 import { suppressClosedRemove } from '../shared/suppress-closed.js';
 import { probeBeforeUnloadRisk } from '../shared/beforeunload-probe.js';
 import { runAutoDedupe } from './dedupe.js';
+import { resolveFocusedActiveTabId } from './focused-tab.js';
+
+export { resolveFocusedActiveTabId };
 
 /**
  * @typedef {import('../shared/stack-records.js').StackRecordStore} StackRecordStore
@@ -184,6 +187,7 @@ export async function maybeReclaim(opts) {
           scriptingApi: opts.scriptingApi,
           activityLog: opts.activityLog,
           probeUnload: opts.probeUnload,
+          tabActivity: opts.tabActivity,
         })
       : { closed: 0, skipped: 'noClosingSet', stub: false };
 
@@ -206,12 +210,19 @@ export async function maybeReclaim(opts) {
   }
 
   /** @type {chrome.tabs.Tab[]} */
-  const tabs = await tabsApi.query({});
+  const rawTabs = await tabsApi.query({});
+  // Apply in-SW activation touches so a just-selected tab sorts as recent
+  // even when Chrome's lastAccessed has not caught up yet.
+  const tabs =
+    typeof opts.tabActivity?.applyToTabs === 'function'
+      ? opts.tabActivity.applyToTabs(rawTabs)
+      : rawTabs;
   const maxOpenTabs = Math.max(1, Number(config.maxOpenTabs) || 50);
   const stackSize = Math.max(1, Number(config.stackSize) || 500);
   stackStore.maxSize = stackSize;
 
   // Prefer the focused window's active tab (not an arbitrary window's .active).
+  // Never reclaim this id — switching to a tab must not vanish it.
   const protectActiveTabId = await resolveFocusedActiveTabId(
     tabs,
     tabsApi,
@@ -340,33 +351,6 @@ export { suppressClosedRemove };
 
 function excessCap(openCount, maxOpenTabs) {
   return Math.max(0, openCount - maxOpenTabs);
-}
-
-/**
- * Protect the focused window's active tab when alternatives exist.
- * @param {chrome.tabs.Tab[]} tabs
- * @param {typeof chrome.tabs} [tabsApi]
- * @param {typeof chrome.windows} [windowsApi]
- * @returns {Promise<number | undefined>}
- */
-export async function resolveFocusedActiveTabId(tabs, tabsApi, windowsApi) {
-  try {
-    if (windowsApi?.getLastFocused) {
-      const focused = await windowsApi.getLastFocused();
-      if (typeof focused?.id === 'number' && tabsApi?.query) {
-        const [active] = await tabsApi.query({ active: true, windowId: focused.id });
-        if (typeof active?.id === 'number') return active.id;
-      }
-      if (typeof focused?.id === 'number') {
-        const inFocused = tabs.find((t) => t.windowId === focused.id && t.active);
-        if (typeof inFocused?.id === 'number') return inFocused.id;
-      }
-    }
-  } catch {
-    // fall through
-  }
-  const active = tabs.find((t) => t.active);
-  return typeof active?.id === 'number' ? active.id : undefined;
 }
 
 /**

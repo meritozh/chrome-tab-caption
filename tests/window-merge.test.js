@@ -49,6 +49,20 @@ describe('window-merge pure helpers', () => {
     );
   });
 
+  it('forces protectActiveTabId into keep-set even with stale lastAccessed', () => {
+    const tabs = [
+      { id: 1, url: 'https://a.test/1', lastAccessed: 100, windowId: 1 },
+      { id: 2, url: 'https://a.test/2', lastAccessed: 80, windowId: 1 },
+      { id: 9, url: 'https://grouped.test', lastAccessed: 1, windowId: 1, active: true },
+    ];
+    const { kept, reclaimTargets } = partitionKeepAndReclaim(tabs, {
+      maxOpenTabs: 2,
+      protectActiveTabId: 9,
+    });
+    assert.ok(kept.some((t) => t.id === 9));
+    assert.equal(reclaimTargets.some((t) => t.id === 9), false);
+  });
+
   it('selects focused window, else preferred, else most tabs', () => {
     const windows = [
       { id: 10 },

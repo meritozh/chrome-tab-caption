@@ -69,13 +69,15 @@ export function excessOpenCount(openCount, maxOpenTabs) {
 /**
  * Pick reclaim targets: least-recently-accessed first.
  * Current window tabs are eligible. Never empties the browser of all tabs.
- * Prefers keeping `protectActiveTabId` when other candidates exist.
+ * Never reclaims `protectActiveTabId` (the focused window's active tab) —
+ * even when that leaves open count above maxOpenTabs. Switching to a tab
+ * must not cause that tab to vanish via reclaim.
  *
  * @param {Array<{ id?: number, url?: string, title?: string, pinned?: boolean, audible?: boolean, lastAccessed?: number, active?: boolean, windowId?: number }>} tabs
  * @param {object} opts
  * @param {number} opts.maxOpenTabs
  * @param {Set<number> | number[] | null} [opts.beforeUnloadRiskIds]
- * @param {number} [opts.protectActiveTabId]  avoid reclaiming this tab while alternatives exist
+ * @param {number} [opts.protectActiveTabId]  never reclaim this tab (focused active)
  * @param {number} [opts.limit]  max targets (defaults to excess)
  * @returns {typeof tabs}
  */
@@ -94,8 +96,12 @@ export function selectReclaimTargets(tabs, opts) {
     return Number.MAX_SAFE_INTEGER;
   };
 
+  const protectId =
+    typeof opts?.protectActiveTabId === 'number' ? opts.protectActiveTabId : null;
+
   const candidates = open
     .filter((t) => isReclaimCandidate(t, { beforeUnloadRiskIds: opts?.beforeUnloadRiskIds }))
+    .filter((t) => protectId == null || t.id !== protectId)
     .slice()
     .sort((a, b) => {
       const la = recency(a);
@@ -103,9 +109,6 @@ export function selectReclaimTargets(tabs, opts) {
       if (la !== lb) return la - lb; // least-recently-accessed first
       return (a.id ?? 0) - (b.id ?? 0);
     });
-
-  const protectId =
-    typeof opts?.protectActiveTabId === 'number' ? opts.protectActiveTabId : null;
 
   /** @type {typeof tabs} */
   const targets = [];
@@ -122,15 +125,8 @@ export function selectReclaimTargets(tabs, opts) {
   };
 
   for (const tab of candidates) {
-    if (protectId != null && tab.id === protectId) continue;
     tryTake(tab);
     if (targets.length >= limit) break;
-  }
-
-  // Second pass: only if still short and the protected active tab is a candidate.
-  if (targets.length < limit && protectId != null) {
-    const active = candidates.find((t) => t.id === protectId);
-    if (active) tryTake(active);
   }
 
   return targets;

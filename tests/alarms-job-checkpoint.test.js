@@ -6,6 +6,7 @@ import {
   ensureOrganizeResumeAlarm,
   clearOrganizeResumeAlarm,
   ensureMaintainAlarm,
+  clearMaintainAlarm,
 } from '../shared/alarms.js';
 import {
   createOrganizeCheckpoint,
@@ -49,6 +50,9 @@ describe('alarm helpers', () => {
     assert.equal(ALARM_NAMES.ORGANIZE_RESUME in created, false);
     assert.equal(await ensureMaintainAlarm(alarms), true);
     assert.equal(created[ALARM_NAMES.MAINTAIN].periodInMinutes, 1);
+    // Product: organize-only reclaim — SW clears this legacy alarm on start.
+    assert.equal(await clearMaintainAlarm(alarms), true);
+    assert.equal(ALARM_NAMES.MAINTAIN in created, false);
   });
 });
 

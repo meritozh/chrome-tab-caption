@@ -74,6 +74,20 @@ describe('groupTabsByNormalizedUrl / planAutoCloseOlder', () => {
     assert.equal(plans[0].close[0].id, 2);
   });
 
+  it('never closes a pinned or audible duplicate even when active wins keep', () => {
+    const plans = planAutoCloseOlder([
+      { id: 1, url: 'https://a.test/m', active: true, lastAccessed: 100 },
+      { id: 2, url: 'https://a.test/m', audible: true, lastAccessed: 1 },
+      { id: 3, url: 'https://a.test/m', pinned: true, lastAccessed: 2 },
+      { id: 4, url: 'https://a.test/m', lastAccessed: 50 },
+    ]);
+    assert.equal(plans[0].keep.id, 1);
+    assert.deepEqual(
+      plans[0].close.map((t) => t.id).sort(),
+      [4],
+    );
+  });
+
   it('skips tabs already in closingTabIds', () => {
     const plans = planAutoCloseOlder(
       [

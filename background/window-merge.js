@@ -23,6 +23,7 @@ import {
   sortByLastAccessedDesc,
 } from '../shared/window-merge.js';
 import { resolveStackMetadata } from './stacks.js';
+import { resolveFocusedActiveTabId } from './focused-tab.js';
 import { runAutoDedupe } from './dedupe.js';
 
 /**
@@ -197,6 +198,7 @@ export async function finalizeSingleWindowOrganize(opts) {
         scriptingApi: opts.scriptingApi,
         activityLog: opts.activityLog,
         probeUnload: opts.probeUnload,
+        tabActivity: opts.tabActivity,
       });
     } catch (err) {
       summary.errors.push(`dedupe: ${err?.message || err}`);
@@ -209,14 +211,22 @@ export async function finalizeSingleWindowOrganize(opts) {
   }
 
   /** @type {chrome.tabs.Tab[]} */
-  let tabs = await tabsApi.query({});
+  let rawTabs = await tabsApi.query({});
+  let tabs =
+    typeof opts.tabActivity?.applyToTabs === 'function'
+      ? opts.tabActivity.applyToTabs(rawTabs)
+      : rawTabs;
   const maxOpenTabs = Math.max(1, Number(config.maxOpenTabs) || 50);
+  const protectActiveTabId = await resolveFocusedActiveTabId(tabs, tabsApi, windowsApi);
 
   // 2) Probe beforeunload for likely reclaim candidates.
   /** @type {Set<number>} */
   const beforeUnloadRiskIds = new Set();
   if (opts.probeUnload !== false) {
-    const prelim = partitionKeepAndReclaim(tabs, { maxOpenTabs }).reclaimTargets;
+    const prelim = partitionKeepAndReclaim(tabs, {
+      maxOpenTabs,
+      protectActiveTabId,
+    }).reclaimTargets;
     for (const tab of prelim.slice(0, Math.max(8, prelim.length))) {
       if (typeof tab.id !== 'number') continue;
       try {
@@ -232,6 +242,7 @@ export async function finalizeSingleWindowOrganize(opts) {
   const { kept, reclaimTargets } = partitionKeepAndReclaim(tabs, {
     maxOpenTabs,
     beforeUnloadRiskIds,
+    protectActiveTabId,
   });
 
   onProgress({

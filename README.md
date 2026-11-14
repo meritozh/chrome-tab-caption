@@ -14,7 +14,7 @@ On-demand LLM topic grouping for Chrome tabs: organize when you ask, cache what 
 | **Cache** | `urlKey` + content hash LRU，避免重复打 LLM | Topic cache so the same page isn’t reclassified |
 | **Privacy** | 自配 endpoint；API key 仅存本地；Options 列出发送字段；Organize 一键直接生效 | Your endpoint, local key, fields listed in Options; Organize applies LLM results immediately |
 | **Dedupe** | 同规范化 URL（同窗或跨窗）自动关闭较旧副本（保留 active/audible/pinned/最近；跳过未保存） | Auto-close-older for normalized URLs within/across windows |
-| **Stacks** | 超过 `maxOpenTabs` 时回收到可搜索归档；召回读 cache/metadata 归组；触及 `stackSize` 先警告再导出/丢弃 | Reclaim past maxOpenTabs; recall merges via cache/metadata; overflow warns then export/discard |
+| **Stacks** | **Organize / Reorganize** 时超过 `maxOpenTabs` 回收到可搜索归档（日常浏览不自动回收）；召回读 cache/metadata 归组；触及 `stackSize` 先警告再导出/丢弃 | Reclaim past maxOpenTabs **only on Organize/Reorganize** (not while browsing); recall via cache/metadata; overflow warns then export/discard |
 | **Extract** | Organize 时按需抽取主文本（Mozilla Readability + ≤~280 excerpt）；非常驻 content script | On-demand main-text extract (Mozilla Readability + ≤~280 excerpt); no always-on content scripts |
 | **Hardening** | Organize 任务状态机 + `alarms` 续跑；本地计数 / 可选日配额；optional host；商店权限/隐私文案 | Task state machine + alarm resume; local metrics / optional daily LLM quota; optional hosts; store permissions & privacy outline |
 
@@ -43,7 +43,7 @@ Product decisions: `docs/decisions-log.md` (Accepted + §10 borrow notes). Store
 ### Try Stacks (Side Panel)
 
 1. Options → set `maxOpenTabs` low (e.g. `3`) for a quick demo → Save
-2. Run **Organize** (or open more tabs than the threshold); excess tabs reclaim into Stacks with topic metadata
+2. Open more tabs than the threshold, then run **Organize** (or **Reorganize**) — excess tabs reclaim into Stacks with topic metadata. Day-to-day browsing does **not** auto-reclaim.
 3. Side Panel → **Stacks** lists reclaimed records; **Recall** restores the URL and group (via cache/metadata)
 4. Search → **Stacked** hits use the same `RECALL_STACK` path
 5. If the archive hits `stackSize`, choose **Export oldest & free space** or **Discard oldest**

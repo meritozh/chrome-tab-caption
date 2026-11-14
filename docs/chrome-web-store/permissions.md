@@ -18,7 +18,7 @@ No install-time `host_permissions`. No always-on `content_scripts`. Side Panel a
 | **tabGroups** | Create and update Chrome tab groups to match topics the user requested after on-demand classification. |
 | **windows** | Enumerate windows for Organize single-window merge, cross-window dedupe, and Stacks. |
 | **storage** | Persist settings (LLM endpoint, thresholds), topic cache, Stacks records, and local metrics in `chrome.storage.local`. API keys stay local; nothing is synced to developer infrastructure. |
-| **alarms** | Schedule deferred reclaim / maintenance and resume interrupted Organize jobs while the MV3 service worker may sleep. |
+| **alarms** | Resume interrupted Organize jobs while the MV3 service worker may sleep. |
 | **sidePanel** | Primary UI: open the Side Panel from the action icon for organize, search, and Stacks. |
 | **scripting** | On user-triggered Organize (and only when content extraction is enabled), inject a short extract script to read a capped page excerpt for classification. Not injected on every page load by default. |
 | **optional_host_permissions** (`http://*/*`, `https://*/*`) | Requested at runtime when the user clicks Organize — LLM endpoint origin and, if extraction is on, page origins. Not granted at install; user can deny. Broad patterns are needed because tab URLs and user endpoints are arbitrary; we do not use always-on `<all_urls>` content scripts. |
