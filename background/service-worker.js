@@ -11,7 +11,13 @@
 
 import { MSG, DEFAULT_CONFIG, SESSION_KEYS, TIMEOUTS, STORAGE_KEYS } from '../shared/constants.js';
 import { loadConfig, saveConfig, redactConfigForUi, mergeConfig } from '../shared/config.js';
-import { buildClassifyPayloadPreview, createLlmClient } from '../shared/llm-client.js';
+import {
+  buildClassifyPayloadPreview,
+  createLlmClient,
+  isLlmConfigured,
+  LLM_CONFIG_REQUIRED_MESSAGE,
+} from '../shared/llm-client.js';
+import { hasEndpointPermission } from '../shared/permissions.js';
 import { TopicCacheLru, loadTopicCache, persistTopicCache } from '../shared/topic-cache.js';
 import { StackRecordStore, loadStackRecords, persistStackRecords } from '../shared/stack-records.js';
 import { normalizeUrlKey, computeContentHash } from '../shared/url-normalize.js';
@@ -347,6 +353,7 @@ async function runOrganizeJob(opts) {
     (result?.ok ||
       result?.cancelled ||
       result?.needsPermission ||
+      result?.needsLlmConfig ||
       isTerminalPhase(organizeCheckpoint?.phase));
   if (terminal && ownsCheckpoint) {
     await clearOrganizeResumeAlarm();
@@ -416,7 +423,6 @@ async function maybeResumeOrganizeFromCheckpoint() {
       currentWindowId: cp.currentWindowId ?? undefined,
       confirmed: true,
       config,
-      llmOpts: { useMock: cp.useMock === true },
       signal: controller.signal,
       jobId,
       clientRunId: cp.clientRunId,
@@ -813,6 +819,14 @@ function onMessage(message, sender, sendResponse) {
           });
           break;
         }
+        if (!isLlmConfigured(config)) {
+          sendResponse({
+            ok: false,
+            needsLlmConfig: true,
+            error: LLM_CONFIG_REQUIRED_MESSAGE,
+          });
+          break;
+        }
         if (config.groupOnDemandOnly === false) {
           // Still never auto-group; flag is informational for Phase 2.
         }
@@ -856,7 +870,6 @@ function onMessage(message, sender, sendResponse) {
             currentWindowId,
             confirmed: true,
             config,
-            llmOpts: { useMock: message.useMock === true },
             signal: controller.signal,
             jobId,
             clientRunId,
@@ -955,39 +968,72 @@ function onMessage(message, sender, sendResponse) {
         break;
       }
       case MSG.TEST_LLM: {
-        // Keep mock for TEST_LLM — never send real secrets in connection-test path.
+        // Real endpoint ping — no mock. Options page should request host permission first.
         const config = mergeConfig(await loadConfig());
-        const client = createLlmClient({
-          provider: /** @type {any} */ (config.llmProvider || undefined),
-          endpointBaseUrl: config.endpointBaseUrl,
-          apiKey: config.apiKey,
-          model: config.model,
-          useMock: true,
-        });
-        const preview = buildClassifyPayloadPreview(
-          {
-            url: message.url ?? 'https://example.com/stub',
-            title: message.title ?? 'Connection test',
-            snippet: 'stub',
-          },
-          {
-            provider: /** @type {any} */ (config.llmProvider || ''),
-            model: config.model,
-            endpointBaseUrl: config.endpointBaseUrl,
-          },
+        if (!isLlmConfigured(config)) {
+          sendResponse({
+            ok: false,
+            needsLlmConfig: true,
+            error: LLM_CONFIG_REQUIRED_MESSAGE,
+          });
+          break;
+        }
+        const allowed = await hasEndpointPermission(
+          config.endpointBaseUrl || '',
+          config.llmProvider || '',
         );
-        const result = await client.classifyTopic({
-          url: message.url ?? 'https://example.com/stub',
+        if (!allowed) {
+          sendResponse({
+            ok: false,
+            needsPermission: true,
+            error:
+              'Host permission for the LLM endpoint is missing. Grant access from Options → Test connection, then retry.',
+          });
+          break;
+        }
+        let client;
+        try {
+          client = createLlmClient({
+            provider: /** @type {any} */ (config.llmProvider),
+            endpointBaseUrl: config.endpointBaseUrl,
+            apiKey: config.apiKey,
+            model: config.model,
+          });
+        } catch (err) {
+          sendResponse({
+            ok: false,
+            needsLlmConfig: true,
+            error: String(err?.message || err || LLM_CONFIG_REQUIRED_MESSAGE),
+          });
+          break;
+        }
+        const testInput = {
+          url: message.url ?? 'https://example.com/connection-test',
           title: message.title ?? 'Connection test',
-          snippet: 'stub',
+          snippet: message.snippet ?? 'ping',
+        };
+        const preview = buildClassifyPayloadPreview(testInput, {
+          provider: /** @type {any} */ (config.llmProvider || ''),
+          model: config.model,
+          endpointBaseUrl: config.endpointBaseUrl,
         });
-        sendResponse({
-          ok: true,
-          stub: true,
-          preview,
-          result,
-          note: 'TEST_LLM always uses MockLlmClient. Real Anthropic/Responses calls run on confirmed Organize.',
-        });
+        try {
+          const result = await client.ping();
+          sendResponse({
+            ok: true,
+            stub: false,
+            preview,
+            result,
+            note: 'Live LLM ping succeeded (real classify against your configured endpoint).',
+          });
+        } catch (err) {
+          sendResponse({
+            ok: false,
+            stub: false,
+            preview,
+            error: `LLM connection failed: ${err?.message || err}`,
+          });
+        }
         break;
       }
       case MSG.GET_ACTIVITY_LOG: {

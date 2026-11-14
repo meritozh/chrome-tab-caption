@@ -1,6 +1,6 @@
 /**
  * LLM client abstraction — Anthropic Messages + OpenAI Responses-style (ADR §3.3).
- * Real network calls from user config (local apiKey). Mock kept for TEST_LLM.
+ * Real network calls from user config (local apiKey) only — no mock / hostname fallback.
  * Never log secrets. Do NOT use chat/completions-only or Gemini Nano as the primary path.
  */
 
@@ -37,6 +37,29 @@ export const CLASSIFY_SYSTEM_PROMPT =
   'You classify browser tabs into fine-grained English topic labels. ' +
   'Reply with a single JSON object only: {"topic":"English Topic","synonyms":["optional near-duplicate"],"confidence":0.0}. ' +
   'Topics must be short, specific, and English. Prefer merging near-duplicates via synonyms. No markdown.';
+
+/** User-facing when provider or API key is missing. */
+export const LLM_CONFIG_REQUIRED_MESSAGE =
+  'LLM is not configured. Set provider and API key in Options before Organize or Test connection.';
+
+/**
+ * True when config has a supported provider and a non-empty API key.
+ * Accepts either `{ provider, apiKey }` or stored config `{ llmProvider, apiKey }`.
+ * @param {Partial<LlmClientConfig> & { llmProvider?: string } | null | undefined} config
+ */
+export function isLlmConfigured(config) {
+  if (!config || typeof config !== 'object') return false;
+  const provider =
+    typeof config.provider === 'string' && config.provider
+      ? config.provider
+      : typeof config.llmProvider === 'string'
+        ? config.llmProvider
+        : '';
+  const apiKey = typeof config.apiKey === 'string' ? config.apiKey.trim() : '';
+  return (
+    (provider === 'anthropic' || provider === 'openai-responses') && apiKey.length > 0
+  );
+}
 
 /**
  * Fields that will be sent for a classify call (privacy preview — ADR #12).
@@ -111,7 +134,7 @@ export function parseClassifyResponseText(text, raw) {
       raw: raw ?? parsed,
     };
   }
-  // Fallback: first non-empty line as topic
+  // Fallback: first non-empty line as topic (model output only — never hostname invent).
   const line = cleaned.split('\n').map((l) => l.trim()).find(Boolean) || 'General';
   return {
     topic: formatTopicLabel(line.replace(/^topic\s*:\s*/i, '').slice(0, 80)),
@@ -163,34 +186,17 @@ export class LlmClient {
   async classifyTopic(_input) {
     throw new Error('LlmClient.classifyTopic not implemented');
   }
-}
 
-/** Mock client — deterministic stub for UI / TEST_LLM; no network. */
-export class MockLlmClient extends LlmClient {
   /**
-   * @param {ClassifyInput} input
+   * Lightweight connectivity check — one real classify against the configured endpoint.
    * @returns {Promise<ClassifyResult>}
    */
-  async classifyTopic(input) {
-    const host = (() => {
-      try {
-        return new URL(input.url).hostname.replace(/^www\./, '');
-      } catch {
-        return 'unknown';
-      }
-    })();
-    const topic = host
-      .split('.')
-      .slice(0, -1)
-      .join(' ')
-      .replace(/[-_]/g, ' ')
-      .trim() || 'General';
-    return {
-      topic: formatTopicLabel(topic),
-      synonyms: [],
-      confidence: 0,
-      raw: { mock: true, title: input.title },
-    };
+  async ping() {
+    return this.classifyTopic({
+      url: 'https://example.com/connection-test',
+      title: 'Connection test',
+      snippet: 'ping',
+    });
   }
 }
 
@@ -339,19 +345,27 @@ export function extractOpenAiResponsesText(data) {
 }
 
 /**
- * Factory from user config.
- * @param {Partial<LlmClientConfig> & { useMock?: boolean }} config
+ * Factory from user config. Refuses without a supported provider + apiKey (no mock).
+ * @param {Partial<LlmClientConfig>} config
  * @returns {LlmClient}
  */
 export function createLlmClient(config) {
-  if (config.useMock || !config.provider || !config.apiKey) {
-    return new MockLlmClient();
+  const provider = config?.provider;
+  const apiKey = typeof config?.apiKey === 'string' ? config.apiKey.trim() : '';
+  if (!provider || !apiKey) {
+    throw new Error(LLM_CONFIG_REQUIRED_MESSAGE);
   }
-  if (config.provider === 'anthropic') {
-    return new AnthropicLlmClient(/** @type {LlmClientConfig} */ (config));
+  const normalized = {
+    provider,
+    endpointBaseUrl: config.endpointBaseUrl || '',
+    apiKey,
+    model: config.model || '',
+  };
+  if (provider === 'anthropic') {
+    return new AnthropicLlmClient(/** @type {LlmClientConfig} */ (normalized));
   }
-  if (config.provider === 'openai-responses') {
-    return new OpenAiResponsesLlmClient(/** @type {LlmClientConfig} */ (config));
+  if (provider === 'openai-responses') {
+    return new OpenAiResponsesLlmClient(/** @type {LlmClientConfig} */ (normalized));
   }
-  return new MockLlmClient();
+  throw new Error(`Unsupported LLM provider: ${provider}`);
 }

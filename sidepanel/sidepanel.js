@@ -310,6 +310,17 @@ organizeBtn?.addEventListener('click', async () => {
     sendToBackground(MSG.GET_CONFIG).catch(() => null),
   ]);
   setBusy(false);
+  const provider = cfg?.config?.llmProvider || '';
+  const hasApiKey = Boolean(cfg?.config?.hasApiKey);
+  const llmReady =
+    hasApiKey && (provider === 'anthropic' || provider === 'openai-responses');
+  if (!llmReady) {
+    organizeStatus.textContent =
+      'LLM not configured — open Options and set provider + API key before Organize.';
+    hidePreview();
+    organizePhase = 'idle';
+    return;
+  }
   if (!res?.ok) {
     organizeStatus.textContent = res?.error || 'Preview failed';
     hidePreview();
@@ -320,8 +331,8 @@ organizeBtn?.addEventListener('click', async () => {
     scope: res.preview?.scope === 'current' ? 'current' : scope,
     windowId,
     endpointBaseUrl: cfg?.config?.endpointBaseUrl || '',
-    llmProvider: cfg?.config?.llmProvider || '',
-    hasApiKey: Boolean(cfg?.config?.hasApiKey),
+    llmProvider: provider,
+    hasApiKey,
     contentExtractionEnabled: cfg?.config?.contentExtractionEnabled !== false,
   });
   organizeStatus.textContent = 'Review fields, then confirm to classify cache misses.';
@@ -393,6 +404,14 @@ cancelBtn?.addEventListener('click', async () => {
 confirmBtn?.addEventListener('click', async () => {
   if (organizeBusy || !pendingPreview) return;
   const pending = pendingPreview;
+  const llmReady =
+    pending.hasApiKey &&
+    (pending.llmProvider === 'anthropic' || pending.llmProvider === 'openai-responses');
+  if (!llmReady) {
+    organizeStatus.textContent =
+      'LLM not configured — open Options and set provider + API key before Confirm.';
+    return;
+  }
   const runId = (organizeRunId = nextOrganizeRunId());
   lastLlmCallsAttempted = 0;
   lastClassified = 0;
@@ -483,9 +502,12 @@ confirmBtn?.addEventListener('click', async () => {
     // Keep preview open so Confirm retains a user-gesture path (e.g. needsPermission).
     organizePhase = 'preview';
     if (scopeSelect) scopeSelect.disabled = true;
-    organizeStatus.textContent = res?.needsPermission
-      ? `${res.error || 'Host permission missing.'} Confirm again after granting access.`
-      : res?.error || 'Organize failed';
+    organizeStatus.textContent = res?.needsLlmConfig
+      ? res.error ||
+        'LLM not configured — open Options and set provider + API key before Organize.'
+      : res?.needsPermission
+        ? `${res.error || 'Host permission missing.'} Confirm again after granting access.`
+        : res?.error || 'Organize failed';
     return;
   }
   hidePreview();

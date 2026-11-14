@@ -20,7 +20,12 @@ import {
 } from '../shared/physical-groups.js';
 import { isSingleWindowMergeScope } from '../shared/window-merge.js';
 import { mergeTopicResult, heuristicTopicsAreSynonyms } from '../shared/topic-normalize.js';
-import { buildClassifyPayloadPreview, createLlmClient } from '../shared/llm-client.js';
+import {
+  buildClassifyPayloadPreview,
+  createLlmClient,
+  isLlmConfigured,
+  LLM_CONFIG_REQUIRED_MESSAGE,
+} from '../shared/llm-client.js';
 import { hasEndpointPermission } from '../shared/permissions.js';
 import { capExcerpt, persistTopicCache } from '../shared/topic-cache.js';
 import { extractTabContent } from '../content/extract.js';
@@ -251,7 +256,6 @@ async function emitCheckpoint(onCheckpoint, checkpoint) {
  * @param {boolean} [opts.confirmed] — must be true after privacy preview
  * @param {TopicCacheLru} opts.topicCache
  * @param {Record<string, unknown>} opts.config
- * @param {{ useMock?: boolean }} [opts.llmOpts]
  * @param {AbortSignal} [opts.signal] — cooperative cancel between classify steps
  * @param {string} [opts.jobId]
  * @param {import('../shared/task-state.js').OrganizeCheckpoint} [opts.resumeFrom]
@@ -347,7 +351,6 @@ export async function groupTabsOnDemand(opts) {
     classified,
     classifyErrors,
     llmCallsAttempted,
-    useMock: opts.llmOpts?.useMock === true || resumeCp?.useMock === true,
     resumeCount,
     phase: resuming ? JOB_PHASES.REFINE : JOB_PHASES.QUEUED,
   });
@@ -573,13 +576,34 @@ export async function groupTabsOnDemand(opts) {
     );
   }
 
-  // Permission grant happens in Side Panel user-gesture; SW only checks containment.
-  const useMock =
-    opts.llmOpts?.useMock === true ||
-    checkpoint.useMock === true ||
-    !config.apiKey ||
-    !config.llmProvider;
-  if (!useMock) {
+  // Cache hits already applied above. Remaining cache misses require a live user LLM —
+  // never invent topics (hostname / mock). All-cache-hit Organize may finish without LLM.
+  const remainingRefineCount = Math.max(0, refineQueue.length - refineStartIndex);
+  if (remainingRefineCount > 0) {
+    if (!isLlmConfigured(config)) {
+      await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.ERROR, { total }));
+      broadcastProgress({
+        jobId,
+        phase: 'error',
+        done: assignments.length,
+        total,
+        message: LLM_CONFIG_REQUIRED_MESSAGE,
+      });
+      return {
+        ok: false,
+        error: LLM_CONFIG_REQUIRED_MESSAGE,
+        needsLlmConfig: true,
+        jobId,
+        classified,
+        classifyErrors,
+        llmCallsAttempted,
+        assignments: assignments.slice(),
+        logical: buildLogicalTopicViews(assignments),
+        physical: { applied: 0, errors: [] },
+      };
+    }
+
+    // Permission grant happens in Side Panel user-gesture; SW only checks containment.
     const allowed = await hasEndpointPermission(
       /** @type {string} */ (config.endpointBaseUrl || ''),
       /** @type {string} */ (config.llmProvider || ''),
@@ -591,6 +615,7 @@ export async function groupTabsOnDemand(opts) {
         error:
           'Host permission for the LLM endpoint is missing. Confirm Organize again after granting access.',
         needsPermission: true,
+        needsLlmConfig: false,
       };
     }
   }
@@ -613,13 +638,34 @@ export async function groupTabsOnDemand(opts) {
     }
   }
 
-  const client = createLlmClient({
-    provider: /** @type {any} */ (config.llmProvider || undefined),
-    endpointBaseUrl: /** @type {string} */ (config.endpointBaseUrl || ''),
-    apiKey: /** @type {string} */ (config.apiKey || ''),
-    model: /** @type {string} */ (config.model || ''),
-    useMock,
-  });
+  /** @type {import('../shared/llm-client.js').LlmClient | null} */
+  let client = null;
+  if (remainingRefineCount > 0) {
+    try {
+      client = createLlmClient({
+        provider: /** @type {any} */ (config.llmProvider),
+        endpointBaseUrl: /** @type {string} */ (config.endpointBaseUrl || ''),
+        apiKey: /** @type {string} */ (config.apiKey || ''),
+        model: /** @type {string} */ (config.model || ''),
+      });
+    } catch (err) {
+      await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.ERROR, { total }));
+      const message = String(err?.message || err || LLM_CONFIG_REQUIRED_MESSAGE);
+      broadcastProgress({
+        jobId,
+        phase: 'error',
+        done: assignments.length,
+        total,
+        message,
+      });
+      return {
+        ok: false,
+        error: message,
+        needsLlmConfig: true,
+        jobId,
+      };
+    }
+  }
 
   // Pass 2 — refine queue (supports resume mid-queue)
   for (let i = refineStartIndex; i < refineQueue.length; i++) {
@@ -711,9 +757,9 @@ export async function groupTabsOnDemand(opts) {
       };
       assignments.push(stepAssignment);
     } else {
-      const allowLlm =
-        useMock || metrics == null || canSpendLlmCall(metrics, dailyQuota);
+      const allowLlm = metrics == null || canSpendLlmCall(metrics, dailyQuota);
       if (!allowLlm) {
+        // Quota exhausted — do not invent topics; skip remaining cache misses.
         classifyErrors += 1;
         broadcastProgress({
           jobId,
@@ -736,6 +782,11 @@ export async function groupTabsOnDemand(opts) {
           { classifyErrors },
         );
         await emitCheckpoint(onCheckpoint, checkpoint);
+        continue;
+      }
+
+      if (!client) {
+        classifyErrors += 1;
         continue;
       }
 
