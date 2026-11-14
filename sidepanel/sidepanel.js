@@ -367,7 +367,8 @@ function adoptAlarmResumeState(state) {
 
 /**
  * End an adopted alarm-resume UI without inventing a success string.
- * Keeps GROUP_PROGRESS / timeout / quota raw copy; only replaces placeholder resume text.
+ * Keeps GROUP_PROGRESS / timeout / quota raw copy; replaces placeholder resume
+ * text and stacksPaused (auto-continue promise) when the checkpoint is abandoned.
  */
 function endAdoptedAlarmResumeUi() {
   const status = organizeStatus?.textContent || '';
@@ -382,9 +383,11 @@ function endAdoptedAlarmResumeUi() {
     isResumePlaceholder ||
     key === 'organize.busy' ||
     key === 'organize.reorganizing' ||
-    key === 'organize.cancelling'
+    key === 'organize.cancelling' ||
+    key === 'organize.stacksPaused' ||
+    key === 'progress.stacks'
   ) {
-    // Alarm resume that ends without Done never applied groups — not a success.
+    // Checkpoint dropped / abandoned — merge never ran; do not promise auto-continue.
     setOrganizeStatus('organize.incomplete');
   }
   setOrganizeIdle();

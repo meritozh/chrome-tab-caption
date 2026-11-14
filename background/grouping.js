@@ -1240,6 +1240,32 @@ export function remainingStacksForReclassify(stacks, processedIds) {
 }
 
 /**
+ * Progress counts relative to the *current* stack list (intersection of
+ * processed ids with live ids) so discarded/recalled ids cannot inflate current.
+ * @param {{ id?: string }[]} stacks
+ * @param {Iterable<string>} processedIds
+ * @returns {{ done: number, total: number, current: number }}
+ */
+export function stackReclassifyProgressCounts(stacks, processedIds) {
+  const done = new Set(
+    [...(processedIds || [])].map((id) => String(id || '')).filter(Boolean),
+  );
+  const list = Array.isArray(stacks) ? stacks : [];
+  const liveIds = list
+    .map((s) => (s?.id ? String(s.id) : ''))
+    .filter(Boolean);
+  const total = liveIds.length;
+  const doneOnLive = liveIds.filter((id) => done.has(id)).length;
+  const pending = total - doneOnLive;
+  return {
+    done: doneOnLive,
+    total,
+    // Next item about to run, or total when finished.
+    current: pending > 0 ? doneOnLive + 1 : total,
+  };
+}
+
+/**
  * Reclassify every StackRecord via LLM (or skip when quota exhausted).
  * Updates stackStore in place and persists; also upserts topic cache.
  * Resume skips ids already in processedStackIds (not a positional index).
@@ -1331,7 +1357,6 @@ async function reclassifyAllStacks(opts) {
   }
 
   let reclassified = 0;
-  const total = stacks.length;
   let complete = true;
 
   for (let i = 0; i < stacks.length; i++) {
@@ -1355,11 +1380,16 @@ async function reclassifyAllStacks(opts) {
       break;
     }
 
-    const current = processed.size + 1;
+    // Counts vs live list only — discarded processed ids must not inflate current.
+    const liveStacks = opts.stackStore?.list?.() ?? stacks;
+    const { done, total, current } = stackReclassifyProgressCounts(
+      liveStacks,
+      processed,
+    );
     broadcastProgress({
       jobId,
       phase: 'stacks',
-      done: processed.size,
+      done,
       total,
       current,
       messageKey: 'progress.stacks',
@@ -1444,11 +1474,15 @@ async function reclassifyAllStacks(opts) {
       bumpStats({ classified: (getStats().classified || 0) + 1 });
     } catch (err) {
       bumpStats({ classifyErrors: (getStats().classifyErrors || 0) + 1 });
+      const errCounts = stackReclassifyProgressCounts(
+        opts.stackStore?.list?.() ?? stacks,
+        processed,
+      );
       broadcastProgress({
         jobId,
         phase: 'refine-error',
-        done: processed.size + 1,
-        total,
+        done: errCounts.done,
+        total: errCounts.total,
         message: `Stack classify failed: ${err?.message || err}`,
         ...getStats(),
       });
