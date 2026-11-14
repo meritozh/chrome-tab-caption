@@ -4,7 +4,7 @@
  * No LLM side-effects here; messages go to the service worker.
  */
 
-import { MSG, SESSION_KEYS, STORAGE_KEYS } from '../shared/constants.js';
+import { DEFAULT_CONFIG, MSG, SESSION_KEYS, STORAGE_KEYS } from '../shared/constants.js';
 import { sendToBackground, onBackgroundBroadcast } from '../shared/messages.js';
 import { requestOrganizePermissions } from '../shared/permissions.js';
 import {
@@ -1141,25 +1141,56 @@ function renderSettingsMetrics(metrics, dailyLlmQuota = 0) {
   list.innerHTML = formatMetricsListHtml(metrics, dailyLlmQuota);
 }
 
+/** Bumped when the user edits Settings so a slow GET_CONFIG cannot clobber input. */
+let settingsLoadId = 0;
+/** True after the user changes a Settings control since the last successful fill. */
+let settingsDirty = false;
+
+function markSettingsDirty() {
+  settingsDirty = true;
+}
+
+/**
+ * Seed the Settings table from defaults first, then overlay GET_CONFIG when ready.
+ * Never leave checkboxes/numbers empty so a premature Save cannot wipe defaults.
+ */
 async function loadSettingsForm() {
+  const loadId = ++settingsLoadId;
+  settingsDirty = false;
+  // Immediate defaults so the table never shows unchecked/empty controls.
+  fillConfigForm(document, DEFAULT_CONFIG);
+
   const [res, metricsRes] = await Promise.all([
     sendToBackground(MSG.GET_CONFIG).catch(() => null),
     sendToBackground(MSG.GET_METRICS).catch(() => null),
   ]);
-  const config = res?.config;
-  if (config && typeof config === 'object') {
-    fillConfigForm(document, config);
+  if (loadId !== settingsLoadId || settingsDirty) {
+    // Newer load started, or the user already edited — do not overwrite.
+    return;
   }
+
+  const config =
+    res?.config && typeof res.config === 'object' ? res.config : DEFAULT_CONFIG;
+  fillConfigForm(document, config);
+  settingsDirty = false;
   renderSettingsMetrics(
     metricsRes?.metrics || {},
-    metricsRes?.dailyLlmQuota ?? config?.dailyLlmQuota ?? 0,
+    metricsRes?.dailyLlmQuota ??
+      /** @type {Record<string, unknown>} */ (config).dailyLlmQuota ??
+      DEFAULT_CONFIG.dailyLlmQuota ??
+      0,
   );
 }
+
+document.getElementById('settings-form')?.addEventListener('input', markSettingsDirty);
+document.getElementById('settings-form')?.addEventListener('change', markSettingsDirty);
 
 document.getElementById('settings-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const status = document.getElementById('save-status');
   const patch = readConfigForm(document);
+  // Invalidate any in-flight load so it cannot overwrite post-Save state.
+  settingsLoadId += 1;
   const res = await sendToBackground(MSG.SET_CONFIG, { patch }).catch((err) => ({
     ok: false,
     error: String(err?.message || err || 'unknown'),
@@ -1169,11 +1200,14 @@ document.getElementById('settings-form')?.addEventListener('submit', async (e) =
       ? tt('settings.saved')
       : tt('settings.saveFail', { error: res?.error || 'unknown' });
   }
-  if (res?.config) fillConfigForm(document, res.config);
+  if (res?.config) {
+    fillConfigForm(document, res.config);
+    settingsDirty = false;
+  }
   const metricsRes = await sendToBackground(MSG.GET_METRICS).catch(() => null);
   renderSettingsMetrics(
     metricsRes?.metrics || {},
-    metricsRes?.dailyLlmQuota ?? res?.config?.dailyLlmQuota ?? 0,
+    metricsRes?.dailyLlmQuota ?? res?.config?.dailyLlmQuota ?? DEFAULT_CONFIG.dailyLlmQuota ?? 0,
   );
 });
 
