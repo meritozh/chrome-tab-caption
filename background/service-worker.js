@@ -1017,7 +1017,7 @@ function onMessage(message, sender, sendResponse) {
             ok: false,
             needsPermission: true,
             error:
-              'Host permission for the LLM endpoint is missing. Grant access from Options → Test connection, then retry.',
+              'Host permission for the LLM endpoint is missing. Grant access from Side Panel → Settings → Test connection, then retry.',
           });
           break;
         }

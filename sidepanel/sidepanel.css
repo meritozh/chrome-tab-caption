@@ -507,6 +507,100 @@ select:disabled {
   border-bottom: 1px solid color-mix(in srgb, var(--accent-9) 40%, transparent);
 }
 
+.sp-settings-section {
+  margin-top: 0.45rem;
+  padding-top: 0.55rem;
+  border-top: none;
+}
+
+.sp-settings-form {
+  margin-top: 0.35rem;
+}
+
+.sp-settings-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.sp-settings-table th,
+.sp-settings-table td {
+  vertical-align: middle;
+  padding: 0.35rem 0.25rem;
+  border-bottom: 1px solid var(--gray-4);
+}
+
+.sp-settings-table th[scope='row'] {
+  width: 38%;
+  text-align: left;
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--muted);
+  padding-right: 0.45rem;
+}
+
+.sp-settings-table td {
+  width: 62%;
+}
+
+.sp-settings-table .sp-settings-group th {
+  padding-top: 0.75rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gray-11);
+  background: transparent;
+}
+
+.sp-settings-table input[type='text'],
+.sp-settings-table input[type='password'],
+.sp-settings-table input[type='url'],
+.sp-settings-table input[type='number'],
+.sp-settings-table select {
+  width: 100%;
+  min-width: 0;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.82rem;
+}
+
+.sp-settings-table input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+}
+
+.sp-settings-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.sp-settings-inline .sp-status {
+  margin: 0;
+  flex: 1 1 8rem;
+}
+
+.sp-settings-fields,
+.sp-settings-metrics {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+}
+
+.sp-settings-fields code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+.sp-settings-actions {
+  margin-top: 0.65rem;
+  margin-bottom: 0.25rem;
+}
+
 .sp-pre {
   margin-top: 0.55rem;
   padding: 0.6rem;

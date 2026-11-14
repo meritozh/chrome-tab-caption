@@ -124,22 +124,224 @@
     </main>
 
     <main id="view-settings" class="sp-view sp-view-settings" hidden>
-      <section class="sp-section" aria-labelledby="settings-heading">
+      <section class="sp-section sp-settings-section" aria-labelledby="settings-heading">
         <h2 id="settings-heading" data-i18n="settings.heading">Settings</h2>
         <p class="sp-help" data-i18n="settings.help">
-          LLM endpoints, thresholds, and privacy live on the Options page. Organize stays in this
-          panel — Options is settings only.
+          LLM, thresholds, and privacy — saved in this panel (local only).
         </p>
-        <a
-          id="link-options"
-          class="sp-link"
-          href="../options/options.html"
-          target="_blank"
-          rel="noopener"
-          data-i18n="settings.openOptions"
-        >
-          Open Options
-        </a>
+        <form id="settings-form" class="sp-settings-form">
+          <table class="sp-settings-table">
+            <tbody>
+              <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupLlm">LLM</th>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="llmProvider" data-i18n="settings.provider">Provider</label>
+                </th>
+                <td>
+                  <select id="llmProvider" name="llmProvider" required>
+                    <option value="" data-i18n="settings.providerSelect">Select…</option>
+                    <option value="anthropic" data-i18n="settings.providerAnthropic">
+                      Anthropic Messages
+                    </option>
+                    <option value="openai-responses" data-i18n="settings.providerOpenai">
+                      OpenAI Responses-style
+                    </option>
+                  </select>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="endpointBaseUrl" data-i18n="settings.endpoint">Endpoint</label>
+                </th>
+                <td>
+                  <input
+                    id="endpointBaseUrl"
+                    name="endpointBaseUrl"
+                    type="url"
+                    data-i18n-placeholder="settings.endpointPlaceholder"
+                    placeholder="https://api.anthropic.com"
+                    autocomplete="off"
+                  />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="apiKey" data-i18n="settings.apiKey">API key</label>
+                </th>
+                <td>
+                  <input
+                    id="apiKey"
+                    name="apiKey"
+                    type="password"
+                    data-i18n-placeholder="settings.apiKeyPlaceholder"
+                    placeholder="Leave blank to keep existing"
+                    autocomplete="off"
+                  />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="model" data-i18n="settings.model">Model</label>
+                </th>
+                <td>
+                  <input
+                    id="model"
+                    name="model"
+                    type="text"
+                    data-i18n-placeholder="settings.modelPlaceholder"
+                    placeholder="e.g. claude-… or gpt-…"
+                    autocomplete="off"
+                  />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row" data-i18n="settings.testLlm">Test LLM</th>
+                <td>
+                  <div class="sp-settings-inline">
+                    <button
+                      type="button"
+                      id="btn-test-llm"
+                      class="sp-secondary"
+                      data-i18n="settings.testBtn"
+                    >
+                      Test connection
+                    </button>
+                    <span id="test-status" class="sp-status" role="status"></span>
+                  </div>
+                </td>
+              </tr>
+
+              <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupThresholds">
+                  Thresholds
+                </th>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="maxOpenTabs">maxOpenTabs</label>
+                </th>
+                <td>
+                  <input id="maxOpenTabs" name="maxOpenTabs" type="number" min="1" step="1" />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="cacheSize">cacheSize</label>
+                </th>
+                <td>
+                  <input id="cacheSize" name="cacheSize" type="number" min="1" step="1" />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="stackSize">stackSize</label>
+                </th>
+                <td>
+                  <input id="stackSize" name="stackSize" type="number" min="1" step="1" />
+                </td>
+              </tr>
+
+              <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupDedupe">Dedupe</th>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="autoDedupeEnabled" data-i18n="settings.autoDedupe">Auto-dedupe</label>
+                </th>
+                <td>
+                  <input id="autoDedupeEnabled" name="autoDedupeEnabled" type="checkbox" />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="dedupeMode" data-i18n="settings.dedupeMode">Mode</label>
+                </th>
+                <td>
+                  <select id="dedupeMode" name="dedupeMode">
+                    <option value="auto-close-older">auto-close-older</option>
+                  </select>
+                </td>
+              </tr>
+
+              <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupContent">Content &amp; cost</th>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="contentExtractionEnabled" data-i18n="settings.extraction">
+                    Extract excerpt
+                  </label>
+                </th>
+                <td>
+                  <input
+                    id="contentExtractionEnabled"
+                    name="contentExtractionEnabled"
+                    type="checkbox"
+                  />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="dailyLlmQuota">dailyLlmQuota</label>
+                </th>
+                <td>
+                  <input id="dailyLlmQuota" name="dailyLlmQuota" type="number" min="0" step="1" />
+                </td>
+              </tr>
+
+              <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupPrivacy">Privacy</th>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <label for="privacyShowFieldsPreview" data-i18n="settings.privacyFields">
+                    List LLM fields
+                  </label>
+                </th>
+                <td>
+                  <input
+                    id="privacyShowFieldsPreview"
+                    name="privacyShowFieldsPreview"
+                    type="checkbox"
+                    checked
+                    disabled
+                  />
+                </td>
+              </tr>
+              <tr>
+                <th scope="row" data-i18n="settings.fieldsSent">Fields sent</th>
+                <td>
+                  <ul class="sp-settings-fields">
+                    <li><code>url</code></li>
+                    <li><code>title</code></li>
+                    <li><code>snippet</code></li>
+                    <li><code>extractedText</code></li>
+                    <li><code>provider</code> / <code>model</code> / <code>endpointBaseUrl</code></li>
+                  </ul>
+                </td>
+              </tr>
+
+              <tr class="sp-settings-group">
+                <th colspan="2" scope="colgroup" data-i18n="settings.groupMetrics">Local metrics</th>
+              </tr>
+              <tr>
+                <th scope="row" data-i18n="settings.metrics">Counters</th>
+                <td>
+                  <ul id="metrics-list" class="sp-settings-metrics" aria-live="polite">
+                    <li class="sp-muted" data-i18n="settings.metricsLoading">Loading…</li>
+                  </ul>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="sp-row sp-actions sp-settings-actions">
+            <button type="submit" class="sp-cta" data-i18n="settings.save">Save</button>
+            <span id="save-status" class="sp-status" role="status"></span>
+          </div>
+        </form>
       </section>
 
       <section class="sp-section" aria-labelledby="preview-heading">

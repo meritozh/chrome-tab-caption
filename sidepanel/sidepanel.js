@@ -1,10 +1,10 @@
 /**
- * Side Panel — compact Organize (fixed all→single scope), Stacks search, Stacks.
- * Toolbar icon toggles this panel; Options is settings-only.
+ * Side Panel — compact Organize (fixed all→single scope), Stacks search, Settings table.
+ * Toolbar icon toggles this panel; Settings tab owns LLM/config (no Options tab open).
  * No LLM side-effects here; messages go to the service worker.
  */
 
-import { MSG, STORAGE_KEYS } from '../shared/constants.js';
+import { MSG, SESSION_KEYS, STORAGE_KEYS } from '../shared/constants.js';
 import { sendToBackground, onBackgroundBroadcast } from '../shared/messages.js';
 import { requestOrganizePermissions } from '../shared/permissions.js';
 import {
@@ -13,6 +13,11 @@ import {
   shouldApplySettingsRetryCompletion,
   shouldMarkOrganizeConfigReady,
 } from '../shared/organize-cancel.js';
+import {
+  fillConfigForm,
+  formatMetricsListHtml,
+  readConfigForm,
+} from '../shared/options-form.js';
 import { mountVirtualList } from './virtual-list.js';
 import { applyDomI18n, normalizeUiLocale, t } from './i18n.js';
 
@@ -190,19 +195,31 @@ function showView(name) {
   document.querySelectorAll('.sp-nav-btn').forEach((btn) => {
     btn.classList.toggle('is-active', btn.dataset.view === name);
   });
+  if (name === 'settings') {
+    void loadSettingsForm();
+  }
 }
 
 document.getElementById('btn-view-main')?.addEventListener('click', () => showView('main'));
 document.getElementById('btn-view-settings')?.addEventListener('click', () => showView('settings'));
 
-document.getElementById('link-options')?.addEventListener('click', (e) => {
-  e.preventDefault();
-  if (chrome.runtime.openOptionsPage) {
-    chrome.runtime.openOptionsPage();
-  } else {
-    window.open(chrome.runtime.getURL('options/options.html'), '_blank');
+/**
+ * Options page (chrome://extensions → Extension options) sets a session flag
+ * asking this panel to open the Settings view — never openOptionsPage from here.
+ */
+async function consumeOpenSidePanelViewFlag() {
+  try {
+    const bag = await chrome.storage.session.get(SESSION_KEYS.OPEN_SIDEPANEL_VIEW);
+    const view = bag?.[SESSION_KEYS.OPEN_SIDEPANEL_VIEW];
+    if (view === 'settings') {
+      await chrome.storage.session.remove(SESSION_KEYS.OPEN_SIDEPANEL_VIEW);
+      showView('settings');
+    }
+  } catch {
+    // session storage optional
   }
-});
+}
+
 
 const organizeBtn = document.getElementById('btn-organize');
 const reorganizeBtn = document.getElementById('btn-reorganize');
@@ -1111,6 +1128,89 @@ searchInput?.addEventListener('keydown', (e) => {
   }
 });
 
+/**
+ * @param {Record<string, unknown>} metrics
+ * @param {number} [dailyLlmQuota]
+ */
+function renderSettingsMetrics(metrics, dailyLlmQuota = 0) {
+  const list = document.getElementById('metrics-list');
+  if (!list) return;
+  list.innerHTML = formatMetricsListHtml(metrics, dailyLlmQuota);
+}
+
+async function loadSettingsForm() {
+  const [res, metricsRes] = await Promise.all([
+    sendToBackground(MSG.GET_CONFIG).catch(() => null),
+    sendToBackground(MSG.GET_METRICS).catch(() => null),
+  ]);
+  const config = res?.config;
+  if (config && typeof config === 'object') {
+    fillConfigForm(document, config);
+  }
+  renderSettingsMetrics(
+    metricsRes?.metrics || {},
+    metricsRes?.dailyLlmQuota ?? config?.dailyLlmQuota ?? 0,
+  );
+}
+
+document.getElementById('settings-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const status = document.getElementById('save-status');
+  const patch = readConfigForm(document);
+  const res = await sendToBackground(MSG.SET_CONFIG, { patch }).catch((err) => ({
+    ok: false,
+    error: String(err?.message || err || 'unknown'),
+  }));
+  if (status) {
+    status.textContent = res?.ok
+      ? tt('settings.saved')
+      : tt('settings.saveFail', { error: res?.error || 'unknown' });
+  }
+  if (res?.config) fillConfigForm(document, res.config);
+  const metricsRes = await sendToBackground(MSG.GET_METRICS).catch(() => null);
+  renderSettingsMetrics(
+    metricsRes?.metrics || {},
+    metricsRes?.dailyLlmQuota ?? res?.config?.dailyLlmQuota ?? 0,
+  );
+});
+
+document.getElementById('btn-test-llm')?.addEventListener('click', async () => {
+  const status = document.getElementById('test-status');
+  if (status) status.textContent = tt('settings.testBusy');
+  // Sync form read only — FIRST await must be permissions.request (user gesture).
+  const form = readConfigForm(document);
+  const provider = /** @type {string} */ (form.llmProvider || '');
+  const endpointBaseUrl = /** @type {string} */ (form.endpointBaseUrl || '');
+  const allowed = await requestOrganizePermissions({
+    endpointBaseUrl,
+    provider,
+    includeExtractHosts: false,
+    includeAllProviderDefaults: true,
+  });
+  if (!allowed) {
+    if (status) status.textContent = tt('settings.testPermissionDenied');
+    return;
+  }
+  // Pass the same in-form LLM fields used for permission so unsaved edits are pinged.
+  const res = await sendToBackground(MSG.TEST_LLM, {
+    url: 'https://example.com/connection-test',
+    title: 'Connection test',
+    config: {
+      llmProvider: form.llmProvider,
+      endpointBaseUrl: form.endpointBaseUrl,
+      apiKey: form.apiKey,
+      model: form.model,
+    },
+  }).catch((err) => ({
+    ok: false,
+    error: String(err?.message || err || 'unknown'),
+  }));
+  if (!status) return;
+  status.textContent = res?.ok
+    ? tt('settings.testOk', { topic: res.result?.topic ?? '?' })
+    : tt('settings.testFail', { error: res?.error || 'unknown' });
+});
+
 document.getElementById('btn-preview')?.addEventListener('click', async () => {
   const out = document.getElementById('preview-out');
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1421,6 +1521,16 @@ localeSelect?.addEventListener('change', () => {
 });
 
 chrome.storage?.onChanged?.addListener((changes, area) => {
+  if (area === 'session') {
+    const change = changes?.[SESSION_KEYS.OPEN_SIDEPANEL_VIEW];
+    if (change?.newValue === 'settings') {
+      void chrome.storage.session
+        .remove(SESSION_KEYS.OPEN_SIDEPANEL_VIEW)
+        .catch(() => {});
+      showView('settings');
+    }
+    return;
+  }
   if (area !== 'local' || !changes?.[STORAGE_KEYS.CONFIG]) return;
   const next = changes[STORAGE_KEYS.CONFIG].newValue || {};
   rememberOrganizeConfig(next);
@@ -1434,6 +1544,7 @@ chrome.storage?.onChanged?.addListener((changes, area) => {
 
 refreshStacks();
 refreshLogicalTopics();
+void consumeOpenSidePanelViewFlag();
 void refreshCachedOrganizeConfig().then(() => {
   applyLocale(uiLocale);
   if (!organizeBusy && organizePhase === 'idle' && organizeStatus) {

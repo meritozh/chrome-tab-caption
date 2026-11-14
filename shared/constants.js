@@ -25,6 +25,8 @@ export const SESSION_KEYS = Object.freeze({
   STACKS_OVERFLOW_PENDING: 'stacksOverflowPending',
   /** Persisted Organize checkpoint for alarm resume (ADR Phase 7). */
   ORGANIZE_CHECKPOINT: 'organizeCheckpoint',
+  /** Ephemeral: Options redirect asks Side Panel to open the Settings view. */
+  OPEN_SIDEPANEL_VIEW: 'openSidePanelView',
 });
 
 /**
