@@ -20,6 +20,7 @@ export function isApiKeyUnchanged(value) {
 
 /**
  * Drop empty/redacted apiKey from a config patch so Save cannot wipe or round-trip bullets.
+ * Also drops legacy size keys — capacity is only `topicCacheSize`.
  * @param {Partial<typeof DEFAULT_CONFIG> | Record<string, unknown> | null | undefined} patch
  * @returns {Partial<typeof DEFAULT_CONFIG> & Record<string, unknown>}
  */
@@ -28,7 +29,29 @@ export function sanitizeConfigPatch(patch) {
   if ('apiKey' in next && isApiKeyUnchanged(next.apiKey)) {
     delete next.apiKey;
   }
+  // Legacy dual knobs — never persist separately after unify.
+  delete next.cacheSize;
+  delete next.stackSize;
   return next;
+}
+
+/**
+ * Resolve the unified topic-cache / Stacks capacity.
+ * Prefers `topicCacheSize`; migrates legacy `cacheSize` / `stackSize` via max when both differ.
+ * @param {Record<string, unknown> | null | undefined} config
+ * @returns {number}
+ */
+export function resolveTopicCacheSize(config) {
+  const unified = Number(config?.topicCacheSize);
+  if (Number.isFinite(unified) && unified >= 1) return Math.floor(unified);
+
+  const candidates = [];
+  const cache = Number(config?.cacheSize);
+  const stack = Number(config?.stackSize);
+  if (Number.isFinite(cache) && cache >= 1) candidates.push(Math.floor(cache));
+  if (Number.isFinite(stack) && stack >= 1) candidates.push(Math.floor(stack));
+  if (candidates.length) return Math.max(...candidates);
+  return DEFAULT_CONFIG.topicCacheSize;
 }
 
 /**
@@ -36,9 +59,15 @@ export function sanitizeConfigPatch(patch) {
  * @returns {typeof DEFAULT_CONFIG & Record<string, unknown>}
  */
 export function mergeConfig(partial) {
+  const src = partial && typeof partial === 'object' ? { ...partial } : {};
+  const topicCacheSize = resolveTopicCacheSize(src);
+  // Drop legacy knobs so callers cannot observe divergent cache vs stack sizes.
+  delete src.cacheSize;
+  delete src.stackSize;
   const next = {
     ...DEFAULT_CONFIG,
-    ...(partial && typeof partial === 'object' ? partial : {}),
+    ...src,
+    topicCacheSize,
   };
   // ADR 2026-11-13: coerce superseded stored value so Organize always merges.
   if (next.groupScope === 'cross-window-logical') {
@@ -61,6 +90,7 @@ export async function loadConfig(storage = globalThis.chrome?.storage) {
 
 /**
  * Persist config. Does not log apiKey. Omits empty/redacted apiKey from the patch.
+ * Always writes unified `topicCacheSize` (legacy cacheSize/stackSize stripped).
  * @param {Partial<typeof DEFAULT_CONFIG>} patch
  * @param {typeof chrome.storage | undefined} storage
  */
@@ -68,6 +98,9 @@ export async function saveConfig(patch, storage = globalThis.chrome?.storage) {
   const current = await loadConfig(storage);
   const safePatch = sanitizeConfigPatch(patch);
   const next = mergeConfig({ ...current, ...safePatch });
+  // Ensure stored blob has no legacy size keys after migration.
+  delete next.cacheSize;
+  delete next.stackSize;
   if (!storage?.local) return next;
   await storage.local.set({ [STORAGE_KEYS.CONFIG]: next });
   return next;

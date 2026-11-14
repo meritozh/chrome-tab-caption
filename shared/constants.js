@@ -80,8 +80,11 @@ export const DEFAULT_CONFIG = Object.freeze({
   apiKey: '',
   model: '',
   maxOpenTabs: 50,
-  cacheSize: 500,
-  stackSize: 500,
+  /**
+   * Shared capacity for topic-cache LRU and Stacks archive.
+   * Legacy `cacheSize` / `stackSize` migrate to this single field (see mergeConfig).
+   */
+  topicCacheSize: 500,
   groupOnDemandOnly: true,
   autoDedupeEnabled: true,
   autoStackEnabled: true,

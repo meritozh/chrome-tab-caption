@@ -138,7 +138,7 @@ export function selectReclaimTargets(tabs, opts) {
  *
  * @param {object} args
  * @param {number} args.size  current stack size
- * @param {number} args.maxSize  stackSize config
+ * @param {number} args.maxSize  topicCacheSize config (Stacks capacity)
  * @param {number} [args.incoming]
  * @returns {{ ok: boolean, accept: number, blocked: number, free: number, needsUserAction: boolean, reason: 'ok' | 'at_capacity' | 'partial' }}
  */

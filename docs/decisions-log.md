@@ -14,7 +14,8 @@ Canonical product ADR lives in the Project store (`docs/tab-manager-adr.md`). Th
 8. **Content** — Optional meta/snippet; on-demand main-text extract with short excerpt cap; no always-on `content_scripts`.
 9. **Search** — Pinyin + fuzzy; **recency-first**.
 10. **Stack overflow** — Warn first; user chooses export or discard.
-11. **UI** — Side Panel primary; **Settings tab** owns LLM/thresholds (label|control table). Chrome Options entry is a thin redirect into Side Panel Settings. **Toolbar icon toggles** the Side Panel (open↔close). Organize CTA lives **only** in the Side Panel. (Revised 2026-11-14.)
+11. **UI** — Side Panel primary; **Settings tab** owns LLM/thresholds (label|control table). Chrome Options entry is a thin redirect into Side Panel Settings. **Toolbar icon toggles** the Side Panel (open↔close) via `action.onClicked` + synchronous `sidePanel.open()` (`openPanelOnActionClick` stays false so clicks can also close; Chrome has no `sidePanel.close` and open-on-click alone cannot toggle). Organize CTA lives **only** in the Side Panel. (Revised 2026-11-14.)
+14. **Capacity** — One setting `topicCacheSize` caps both the topic-cache LRU and the Stacks archive. Legacy `cacheSize` / `stackSize` migrate to `max(cache, stack)` then are stripped from storage. (Accepted 2026-11-14.)
 12. **Privacy UX** — Document LLM payload fields in Side Panel Settings (API key never listed). **Organize applies classify results immediately** — no Confirm / payload-preview gate before or after LLM (revised 2026-11-14; supersedes “always preview + Confirm before real calls”).
 13. **Live LLM only** — No mock / hostname topic fallback. Organize and `TEST_LLM` require a configured, reachable user LLM; cache hits may still apply, but new topics are never invented locally.
 

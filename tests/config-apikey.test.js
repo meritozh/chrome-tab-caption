@@ -83,6 +83,36 @@ describe('groupScope migration', () => {
   });
 });
 
+describe('topicCacheSize unify migration', () => {
+  it('takes max of legacy cacheSize and stackSize when they differ', async () => {
+    const { mergeConfig, resolveTopicCacheSize } = await import('../shared/config.js');
+    assert.equal(resolveTopicCacheSize({ cacheSize: 200, stackSize: 800 }), 800);
+    const cfg = mergeConfig({ cacheSize: 200, stackSize: 800, maxOpenTabs: 40 });
+    assert.equal(cfg.topicCacheSize, 800);
+    assert.equal('cacheSize' in cfg, false);
+    assert.equal('stackSize' in cfg, false);
+  });
+
+  it('prefers explicit topicCacheSize over legacy knobs', async () => {
+    const { mergeConfig } = await import('../shared/config.js');
+    const cfg = mergeConfig({ topicCacheSize: 100, cacheSize: 500, stackSize: 900 });
+    assert.equal(cfg.topicCacheSize, 100);
+  });
+
+  it('saveConfig strips legacy size keys from storage', async () => {
+    const { saveConfig } = await import('../shared/config.js');
+    const storage = mockStorage({
+      [STORAGE_KEYS.CONFIG]: { cacheSize: 300, stackSize: 700, model: 'm' },
+    });
+    const next = await saveConfig({}, storage);
+    assert.equal(next.topicCacheSize, 700);
+    const stored = storage.local._data[STORAGE_KEYS.CONFIG];
+    assert.equal(stored.topicCacheSize, 700);
+    assert.equal('cacheSize' in stored, false);
+    assert.equal('stackSize' in stored, false);
+  });
+});
+
 describe('resolveTestLlmConfig (Options Test ↔ TEST_LLM)', () => {
   it('uses stored config when form override is missing', () => {
     const resolved = resolveTestLlmConfig(

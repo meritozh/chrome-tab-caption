@@ -6,6 +6,7 @@
  */
 
 import { MSG, TAB_GROUP_ID_NONE } from '../shared/constants.js';
+import { resolveTopicCacheSize } from '../shared/config.js';
 import {
   createStackRecord,
   persistStackRecords,
@@ -218,7 +219,7 @@ export async function maybeReclaim(opts) {
       ? opts.tabActivity.applyToTabs(rawTabs)
       : rawTabs;
   const maxOpenTabs = Math.max(1, Number(config.maxOpenTabs) || 50);
-  const stackSize = Math.max(1, Number(config.stackSize) || 500);
+  const stackSize = resolveTopicCacheSize(config);
   stackStore.maxSize = stackSize;
 
   // Prefer the focused window's active tab (not an arbitrary window's .active).
@@ -473,7 +474,7 @@ export async function exportOrDiscardStacks(opts) {
 
   const pending = opts.overflowPending;
   const liveExcess = Math.max(0, store.size - store.maxSize);
-  // Refuse stale CTA clicks once the overflow gate was cleared (e.g. stackSize raised).
+  // Refuse stale CTA clicks once the overflow gate was cleared (e.g. topicCacheSize raised).
   if (!pending?.needsUserAction && liveExcess <= 0) {
     return { ok: false, error: 'no overflow pending', stackCount: store.size };
   }

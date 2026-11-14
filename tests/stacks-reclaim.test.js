@@ -48,7 +48,7 @@ describe('maybeReclaim integration (mocked tabs)', () => {
     /** @type {Set<number>} */
     const closingTabIds = new Set();
     const result = await maybeReclaim({
-      config: { maxOpenTabs: 2, stackSize: 500, autoStackEnabled: true },
+      config: { maxOpenTabs: 2, topicCacheSize: 500, autoStackEnabled: true },
       stackStore: store,
       closingTabIds,
       tabsApi,
@@ -91,7 +91,7 @@ describe('maybeReclaim integration (mocked tabs)', () => {
     };
     const store = new StackRecordStore(500);
     const result = await maybeReclaim({
-      config: { maxOpenTabs: 1, stackSize: 500, autoStackEnabled: true },
+      config: { maxOpenTabs: 1, topicCacheSize: 500, autoStackEnabled: true },
       stackStore: store,
       closingTabIds: new Set(),
       tabsApi,
@@ -123,7 +123,7 @@ describe('maybeReclaim integration (mocked tabs)', () => {
     /** @type {object | null} */
     let pending = null;
     const result = await maybeReclaim({
-      config: { maxOpenTabs: 1, stackSize: 1, autoStackEnabled: true },
+      config: { maxOpenTabs: 1, topicCacheSize: 1, autoStackEnabled: true },
       stackStore: store,
       closingTabIds: new Set(),
       tabsApi,

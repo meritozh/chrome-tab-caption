@@ -16,8 +16,8 @@ function parseThreshold(raw, fallback) {
 describe('threshold parsing', () => {
   it('falls back on blank, zero, and negative', () => {
     assert.equal(parseThreshold('', DEFAULT_CONFIG.maxOpenTabs), 50);
-    assert.equal(parseThreshold('0', DEFAULT_CONFIG.cacheSize), 500);
-    assert.equal(parseThreshold('-3', DEFAULT_CONFIG.stackSize), 500);
+    assert.equal(parseThreshold('0', DEFAULT_CONFIG.topicCacheSize), 500);
+    assert.equal(parseThreshold('-3', DEFAULT_CONFIG.topicCacheSize), 500);
   });
 
   it('accepts positive integers', () => {
