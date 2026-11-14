@@ -1,5 +1,5 @@
 /**
- * Options page — LLM endpoint + thresholds + privacy fields preview (always shown).
+ * Options page — LLM endpoint + thresholds + privacy fields list (informational).
  */
 
 import { DEFAULT_CONFIG, MSG } from '../shared/constants.js';
@@ -40,7 +40,7 @@ function fillForm(config) {
     }
   }
   const privacy = document.getElementById('privacyShowFieldsPreview');
-  if (privacy) privacy.checked = true; // ADR #12 — always on
+  if (privacy) privacy.checked = true; // ADR #12 — fields listed in Options
 }
 
 function readForm() {

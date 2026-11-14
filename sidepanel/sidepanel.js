@@ -1,16 +1,18 @@
 /**
- * Side Panel — primary Organize UI (privacy preview confirm), Search, Stacks.
+ * Side Panel — primary Organize UI (one-click apply), Search, Stacks.
  * Toolbar icon toggles this panel; Options is settings-only.
  * No LLM side-effects here; messages go to the service worker.
  */
 
-import { MSG } from '../shared/constants.js';
+import { MSG, STORAGE_KEYS } from '../shared/constants.js';
 import { sendToBackground, onBackgroundBroadcast } from '../shared/messages.js';
 import { requestOrganizePermissions } from '../shared/permissions.js';
 import {
   formatOrganizeCancelMessage,
-  isPreviewOnlyCancel,
+  isIdleOrganizeCancel,
   shouldApplyOrganizeCompletion,
+  shouldApplySettingsRetryCompletion,
+  shouldMarkOrganizeConfigReady,
 } from '../shared/organize-cancel.js';
 
 /** Long-lived port so the service worker can toggle-close this panel. */
@@ -55,10 +57,8 @@ document.getElementById('link-options')?.addEventListener('click', (e) => {
 });
 
 const organizeBtn = document.getElementById('btn-organize');
-const confirmBtn = document.getElementById('btn-confirm-organize');
 const cancelBtn = document.getElementById('btn-cancel-organize');
 const organizeStatus = document.getElementById('organize-status');
-const previewPanel = document.getElementById('organize-preview');
 const progressTrack = document.getElementById('organize-progress-track');
 const scopeSelect = /** @type {HTMLSelectElement | null} */ (document.getElementById('group-scope'));
 
@@ -67,23 +67,6 @@ function setOrganizeProgressVisible(visible) {
   organizeStatus?.classList.toggle('is-running', Boolean(visible));
 }
 
-/**
- * @typedef {object} PendingOrganize
- * @property {string} scope
- * @property {number | undefined} windowId
- * @property {number} eligibleCount
- * @property {number} cacheHits
- * @property {number} cacheMisses
- * @property {string[]} fieldsTemplate
- * @property {unknown[]} samples
- * @property {string} endpointBaseUrl
- * @property {string} llmProvider
- * @property {boolean} hasApiKey
- * @property {boolean} contentExtractionEnabled
- */
-
-/** @type {PendingOrganize | null} */
-let pendingPreview = null;
 let organizeBusy = false;
 
 /** @returns {number} unique across side-panel windows */
@@ -92,21 +75,21 @@ function nextOrganizeRunId() {
 }
 
 /**
- * Generation token — Cancel bumps this so in-flight Confirm / progress cannot update UI.
+ * Generation token — Cancel bumps this so in-flight Organize / progress cannot update UI.
  * Must be unique across side-panel instances (windows) so CANCEL_GROUP preemptive
  * marks do not collide. Never a simple 0-based counter alone.
  * @type {number}
  */
 let organizeRunId = nextOrganizeRunId();
-/** @type {'idle' | 'preview' | 'confirming' | 'running' | 'cancelling'} */
+/** @type {'idle' | 'permissions' | 'running' | 'cancelling'} */
 let organizePhase = 'idle';
 /** @type {string | null} */
 let activeJobId = null;
-/** Side Panel adopted this job via alarm resume (not a local Confirm). */
+/** Side Panel adopted this job via alarm resume (not a local Organize click). */
 let adoptedAlarmResume = false;
 /**
  * Alarm-resume jobId seen via GET_JOB_STATE / JOB_STATE even when UI adopt was
- * blocked (busy/preview). Used so Cancel can target that job without aborting
+ * blocked (busy). Used so Cancel can target that job without aborting
  * unrelated Organize runs in other windows.
  * @type {string | null}
  */
@@ -118,21 +101,25 @@ const suppressedJobIds = new Set();
 let lastLlmCallsAttempted = 0;
 let lastClassified = 0;
 
-function setBusy(busy) {
-  organizeBusy = busy;
-  if (organizeBtn) organizeBtn.disabled = busy;
-  if (confirmBtn) confirmBtn.disabled = busy;
-  // Cancel stays enabled so the user can abort confirming / running jobs.
-  if (cancelBtn) cancelBtn.disabled = false;
-  // Keep scope locked while a preview is pending so Confirm matches what was reviewed.
-  if (scopeSelect) scopeSelect.disabled = busy || Boolean(pendingPreview);
-  if (!busy) setOrganizeProgressVisible(false);
+/** True after a successful storage/SW config hydrate (may still be unconfigured LLM). */
+let organizeConfigReady = false;
+/** True when the last hydrate failed — Organize stays clickable to retry. */
+let organizeConfigLoadFailed = false;
+
+function syncOrganizeEnabled() {
+  if (!organizeBtn) return;
+  // Disable until hydrated; if hydrate failed, keep clickable for recoverable retry.
+  organizeBtn.disabled =
+    organizeBusy || (!organizeConfigReady && !organizeConfigLoadFailed);
 }
 
-function hidePreview() {
-  pendingPreview = null;
-  if (previewPanel) previewPanel.hidden = true;
-  if (scopeSelect && !organizeBusy) scopeSelect.disabled = false;
+function setBusy(busy) {
+  organizeBusy = busy;
+  syncOrganizeEnabled();
+  // Cancel stays enabled so the user can abort permission / running jobs.
+  if (cancelBtn) cancelBtn.disabled = false;
+  if (scopeSelect) scopeSelect.disabled = busy;
+  if (!busy) setOrganizeProgressVisible(false);
 }
 
 function setOrganizeIdle() {
@@ -189,14 +176,8 @@ function adoptAlarmResumeState(state) {
     Number(state?.remaining) > 0 &&
     jobId &&
     !suppressedJobIds.has(jobId);
-  // Never hijack preview / Confirm / busy Organize (phase alone is not enough —
-  // Organize sets phase idle while setBusy(true) during preview fetch).
-  if (
-    !isAlarmResume ||
-    organizePhase !== 'idle' ||
-    organizeBusy ||
-    pendingPreview
-  ) {
+  // Never hijack a busy / in-flight Organize started from this panel.
+  if (!isAlarmResume || organizePhase !== 'idle' || organizeBusy) {
     return false;
   }
 
@@ -209,13 +190,6 @@ function adoptAlarmResumeState(state) {
   lastLlmCallsAttempted = Number(state.llmCallsAttempted) || lastLlmCallsAttempted;
   lastClassified = Number(state.classified) || lastClassified;
   setBusy(true);
-  if (previewPanel) {
-    previewPanel.hidden = false;
-    const summary = document.getElementById('organize-preview-summary');
-    if (summary) {
-      summary.textContent = `Resuming Organize — ${state.remaining} tabs left. Cancel still works.`;
-    }
-  }
   organizeStatus.textContent = `Alarm resume — ${state.remaining} tabs queued…`;
   setOrganizeProgressVisible(true);
   return true;
@@ -235,7 +209,6 @@ function endAdoptedAlarmResumeUi() {
   ) {
     organizeStatus.textContent = 'Organize ended.';
   }
-  hidePreview();
   setOrganizeIdle();
   sendToBackground(MSG.GET_LOGICAL_TOPICS)
     .then((res) => {
@@ -257,177 +230,171 @@ async function getPanelWindowId() {
   }
 }
 
-function renderOrganizePreview(preview, meta) {
-  pendingPreview = {
-    scope: meta.scope,
-    windowId: meta.windowId,
-    eligibleCount: preview.eligibleCount,
-    cacheHits: preview.cacheHits,
-    cacheMisses: preview.cacheMisses,
-    fieldsTemplate: preview.fieldsTemplate || [],
-    samples: preview.samples || [],
-    endpointBaseUrl: meta.endpointBaseUrl || '',
-    llmProvider: meta.llmProvider || '',
-    hasApiKey: Boolean(meta.hasApiKey),
-    contentExtractionEnabled: meta.contentExtractionEnabled !== false,
+/**
+ * Cached Options config for Organize click — sync read so permissions.request
+ * can be the first await (Chrome user-gesture requirement; matches Options Test LLM).
+ * Organize stays disabled until hydrate finishes (avoids false "LLM not configured").
+ * @type {{
+ *   llmProvider: string,
+ *   endpointBaseUrl: string,
+ *   hasApiKey: boolean,
+ *   contentExtractionEnabled: boolean,
+ * }}
+ */
+let cachedOrganizeConfig = {
+  llmProvider: '',
+  endpointBaseUrl: '',
+  hasApiKey: false,
+  contentExtractionEnabled: true,
+};
+
+/**
+ * @param {Record<string, unknown> | null | undefined} config
+ * @returns {boolean} true when a config object was applied
+ */
+function rememberOrganizeConfig(config) {
+  if (!shouldMarkOrganizeConfigReady(config)) return false;
+  const apiKey = /** @type {Record<string, unknown>} */ (config).apiKey;
+  cachedOrganizeConfig = {
+    llmProvider:
+      typeof config.llmProvider === 'string' ? config.llmProvider : '',
+    endpointBaseUrl:
+      typeof config.endpointBaseUrl === 'string' ? config.endpointBaseUrl : '',
+    hasApiKey: Boolean(
+      config.hasApiKey || (typeof apiKey === 'string' && apiKey.length > 0),
+    ),
+    contentExtractionEnabled: config.contentExtractionEnabled !== false,
   };
-  organizePhase = 'preview';
-  if (!previewPanel) return;
-  previewPanel.hidden = false;
-  if (scopeSelect) {
-    scopeSelect.value = pendingPreview.scope;
-    scopeSelect.disabled = true;
-  }
-  const summary = document.getElementById('organize-preview-summary');
-  const fieldsEl = document.getElementById('organize-preview-fields');
-  const samplesEl = document.getElementById('organize-preview-samples');
-  if (summary) {
-    summary.textContent = `${preview.eligibleCount} eligible tabs · ${preview.cacheHits} cache hits · ${preview.cacheMisses} to classify (scope: ${pendingPreview.scope}). Fields below are what real classify would send (API key never shown).`;
-  }
-  if (fieldsEl) {
-    fieldsEl.innerHTML = (preview.fieldsTemplate || [])
-      .map((name) => `<li><code>${escapeHtml(name)}</code></li>`)
-      .join('');
-  }
-  if (samplesEl) {
-    samplesEl.hidden = false;
-    samplesEl.textContent = JSON.stringify(preview.samples ?? [], null, 2);
+  return true;
+}
+
+/**
+ * @param {{ hasApiKey?: boolean, llmProvider?: string } | null | undefined} [cfg]
+ */
+function isCachedLlmReady(cfg = cachedOrganizeConfig) {
+  const provider = cfg?.llmProvider || '';
+  return (
+    Boolean(cfg?.hasApiKey) &&
+    (provider === 'anthropic' || provider === 'openai-responses')
+  );
+}
+
+/**
+ * Hydrate from chrome.storage.local (no SW round-trip). Marks ready / load-failed.
+ * @returns {Promise<boolean>}
+ */
+async function hydrateOrganizeConfigFromStorage() {
+  try {
+    const storage = globalThis.chrome?.storage?.local;
+    if (!storage?.get) {
+      organizeConfigReady = false;
+      organizeConfigLoadFailed = true;
+      syncOrganizeEnabled();
+      return false;
+    }
+    const result = await storage.get(STORAGE_KEYS.CONFIG);
+    rememberOrganizeConfig(result?.[STORAGE_KEYS.CONFIG] || {});
+    organizeConfigReady = true;
+    organizeConfigLoadFailed = false;
+    syncOrganizeEnabled();
+    return true;
+  } catch {
+    organizeConfigReady = false;
+    organizeConfigLoadFailed = true;
+    syncOrganizeEnabled();
+    return false;
   }
 }
 
+/**
+ * Prefer local storage; fall back to SW GET_CONFIG if storage hydrate fails.
+ * Only marks ready when a real config object was remembered (ok:false → retry).
+ * @returns {Promise<typeof cachedOrganizeConfig>}
+ */
+function refreshCachedOrganizeConfig() {
+  return hydrateOrganizeConfigFromStorage().then(async (ok) => {
+    if (ok) return cachedOrganizeConfig;
+    try {
+      const res = await sendToBackground(MSG.GET_CONFIG);
+      if (rememberOrganizeConfig(res?.config)) {
+        organizeConfigReady = true;
+        organizeConfigLoadFailed = false;
+      } else {
+        organizeConfigReady = false;
+        organizeConfigLoadFailed = true;
+      }
+      syncOrganizeEnabled();
+    } catch {
+      organizeConfigReady = false;
+      organizeConfigLoadFailed = true;
+      syncOrganizeEnabled();
+    }
+    return cachedOrganizeConfig;
+  });
+}
+
+const ORGANIZE_READY_STATUS =
+  'Ready — Organize applies LLM topics immediately (Cancel stops an in-flight job).';
+
 organizeBtn?.addEventListener('click', async () => {
   if (organizeBusy) return;
-  setBusy(true);
-  organizePhase = 'idle';
-  organizeStatus.textContent = 'Building privacy preview…';
-  const scope = scopeSelect?.value === 'current' ? 'current' : 'all';
-  const windowId = await getPanelWindowId();
-  const [res, cfg] = await Promise.all([
-    sendToBackground(MSG.PREVIEW_GROUP_PAYLOAD, { scope, windowId }).catch((err) => ({
-      ok: false,
-      error: String(err),
-    })),
-    sendToBackground(MSG.GET_CONFIG).catch(() => null),
-  ]);
-  setBusy(false);
-  const provider = cfg?.config?.llmProvider || '';
-  const hasApiKey = Boolean(cfg?.config?.hasApiKey);
-  const llmReady =
-    hasApiKey && (provider === 'anthropic' || provider === 'openai-responses');
-  if (!llmReady) {
-    organizeStatus.textContent =
-      'LLM not configured — open Options and set provider + API key before Organize.';
-    hidePreview();
-    organizePhase = 'idle';
-    return;
-  }
-  if (!res?.ok) {
-    organizeStatus.textContent = res?.error || 'Preview failed';
-    hidePreview();
-    organizePhase = 'idle';
-    return;
-  }
-  renderOrganizePreview(res.preview, {
-    scope: res.preview?.scope === 'current' ? 'current' : scope,
-    windowId,
-    endpointBaseUrl: cfg?.config?.endpointBaseUrl || '',
-    llmProvider: provider,
-    hasApiKey,
-    contentExtractionEnabled: cfg?.config?.contentExtractionEnabled !== false,
-  });
-  organizeStatus.textContent = 'Review fields, then confirm to classify cache misses.';
-});
 
-cancelBtn?.addEventListener('click', async () => {
-  const phase = organizePhase;
-  const cancelledRunId = organizeRunId;
-  // Invalidate any in-flight Confirm handler (permission await or GROUP_TABS).
-  organizeRunId = nextOrganizeRunId();
-
-  if (isPreviewOnlyCancel(phase)) {
-    // Only cancel a job this panel knows about — never bare cancelActive (other windows).
-    const jobToCancel = activeJobId || knownAlarmJobId;
-    if (jobToCancel) {
-      suppressJob(jobToCancel);
-      sendToBackground(MSG.CANCEL_GROUP, { jobId: jobToCancel }).catch(() => {});
-      knownAlarmJobId = null;
+  // Recoverable path when boot hydrate failed: refetch, then ask for a second click
+  // so permissions.request can still be the first await of a fresh user gesture.
+  if (!organizeConfigReady) {
+    const runId = (organizeRunId = nextOrganizeRunId());
+    // Non-idle phase so Cancel does not take the idle/alarm path mid-retry.
+    organizePhase = 'permissions';
+    setBusy(true);
+    organizeStatus.textContent = 'Loading settings…';
+    await refreshCachedOrganizeConfig();
+    // Matching runId must idle even while busy (this retry set busy).
+    // Superseded runId must not setOrganizeIdle (would clobber a newer Organize).
+    if (
+      !shouldApplySettingsRetryCompletion({
+        runId,
+        activeRunId: organizeRunId,
+      })
+    ) {
+      return;
     }
-    hidePreview();
     setOrganizeIdle();
-    lastLlmCallsAttempted = 0;
-    lastClassified = 0;
-    organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
-    return;
-  }
-
-  if (phase === 'confirming') {
-    // Permission step — preemptive clientRunId cancel only (no cross-window abort).
-    hidePreview();
-    setOrganizeIdle();
-    lastLlmCallsAttempted = 0;
-    lastClassified = 0;
-    organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
-    sendToBackground(MSG.CANCEL_GROUP, { clientRunId: cancelledRunId }).catch(() => {});
-    return;
-  }
-
-  if (phase === 'running' || phase === 'cancelling') {
-    organizePhase = 'cancelling';
-    organizeStatus.textContent = 'Cancelling…';
-    const jobIdToCancel = activeJobId || knownAlarmJobId;
-    hidePreview();
-    const cancelRes = await sendToBackground(MSG.CANCEL_GROUP, {
-      clientRunId: cancelledRunId,
-      jobId: jobIdToCancel || undefined,
-    }).catch(() => ({ ok: false }));
-    // Suppress only when SW confirmed cancel / cleared pending — otherwise a
-    // not-yet-started INTERRUPTED job could stay suppressed while still queued.
-    if (cancelRes?.cancelled || cancelRes?.hadActiveJob || cancelRes?.clearedPending) {
-      suppressJob(jobIdToCancel);
-      knownAlarmJobId = null;
+    if (!organizeConfigReady) {
+      organizeStatus.textContent =
+        'Could not load settings. Click Organize to retry.';
+      return;
     }
-    // Confirm handler will refine copy from the cancelled job result when it returns;
-    // show best-known progress counts immediately (never invent "no LLM" if we saw calls).
-    organizeStatus.textContent = formatOrganizeCancelMessage({
-      llmCallsAttempted: lastLlmCallsAttempted,
-      classified: lastClassified,
-    });
-    setOrganizeIdle();
+    organizeStatus.textContent = isCachedLlmReady()
+      ? 'Settings loaded — click Organize again.'
+      : 'LLM not configured — open Options and set provider + API key before Organize.';
     return;
   }
 
-  hidePreview();
-  setOrganizeIdle();
-  organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
-});
-
-confirmBtn?.addEventListener('click', async () => {
-  if (organizeBusy || !pendingPreview) return;
-  const pending = pendingPreview;
-  const llmReady =
-    pending.hasApiKey &&
-    (pending.llmProvider === 'anthropic' || pending.llmProvider === 'openai-responses');
-  if (!llmReady) {
-    organizeStatus.textContent =
-      'LLM not configured — open Options and set provider + API key before Confirm.';
-    return;
-  }
   const runId = (organizeRunId = nextOrganizeRunId());
   lastLlmCallsAttempted = 0;
   lastClassified = 0;
   activeJobId = null;
-  organizePhase = 'confirming';
+  adoptedAlarmResume = false;
+  organizePhase = 'permissions';
   setBusy(true);
   organizeStatus.textContent = 'Organizing…';
   setOrganizeProgressVisible(true);
 
-  // FIRST await must be permissions.request to preserve the click user gesture.
-  // Always request (not gated on stale hasApiKey): covers key/provider saved after preview.
-  // Extract hosts only when content extraction is enabled (optional_host_permissions).
+  const scope = scopeSelect?.value === 'current' ? 'current' : 'all';
+  // Sync cache read only — FIRST await must be permissions.request (user gesture).
+  const cached = cachedOrganizeConfig;
+  const provider = cached.llmProvider || '';
+  if (!isCachedLlmReady(cached)) {
+    setOrganizeIdle();
+    organizeStatus.textContent =
+      'LLM not configured — open Options and set provider + API key before Organize.';
+    return;
+  }
+
   const allowed = await requestOrganizePermissions({
-    endpointBaseUrl: pending.endpointBaseUrl,
-    provider: pending.llmProvider,
-    includeExtractHosts: pending.contentExtractionEnabled !== false,
+    endpointBaseUrl: cached.endpointBaseUrl || '',
+    provider,
+    includeExtractHosts: cached.contentExtractionEnabled !== false,
     includeAllProviderDefaults: true,
   });
 
@@ -437,11 +404,24 @@ confirmBtn?.addEventListener('click', async () => {
   }
 
   if (!allowed) {
-    setBusy(false);
-    organizePhase = 'preview';
-    if (scopeSelect) scopeSelect.disabled = true;
+    setOrganizeIdle();
     organizeStatus.textContent =
-      'Host permission denied. Grant LLM + page access, then Confirm again.';
+      'Host permission denied. Grant LLM + page access, then Organize again.';
+    return;
+  }
+
+  const windowId = await getPanelWindowId();
+  if (runId !== organizeRunId) return;
+
+  // Optional refresh after grant. Failed GET_CONFIG keeps the cache that already
+  // passed llmReady — SW loads config itself for GROUP_TABS.
+  const cfg = await sendToBackground(MSG.GET_CONFIG).catch(() => null);
+  if (runId !== organizeRunId) return;
+  if (cfg?.config) rememberOrganizeConfig(cfg.config);
+  if (!isCachedLlmReady()) {
+    setOrganizeIdle();
+    organizeStatus.textContent =
+      'LLM not configured — open Options and set provider + API key before Organize.';
     return;
   }
 
@@ -451,9 +431,8 @@ confirmBtn?.addEventListener('click', async () => {
     return;
   }
   const res = await sendToBackground(MSG.GROUP_TABS, {
-    scope: pending.scope,
-    windowId: pending.windowId,
-    confirmed: true,
+    scope,
+    windowId,
     clientRunId: runId,
   }).catch((err) => ({ ok: false, error: String(err) }));
 
@@ -464,7 +443,9 @@ confirmBtn?.addEventListener('click', async () => {
   });
 
   if (!stillActive) {
-    // Cancel already updated status; absorb stale completion.
+    // Newer Organize owns the UI — never clear busy/progress for that run.
+    if (organizeBusy || organizePhase !== 'idle') return;
+    // Cancel already idled this panel; refine cancel copy only while still idle.
     if (res?.cancelled) {
       lastLlmCallsAttempted = Number(res.llmCallsAttempted) || lastLlmCallsAttempted;
       lastClassified = Number(res.classified) || lastClassified;
@@ -476,12 +457,10 @@ confirmBtn?.addEventListener('click', async () => {
         renderLogicalTopics(res.logical);
       }
     }
-    setOrganizeIdle();
     return;
   }
 
   if (res?.cancelled) {
-    hidePreview();
     lastLlmCallsAttempted = Number(res.llmCallsAttempted) || 0;
     lastClassified = Number(res.classified) || 0;
     organizeStatus.textContent =
@@ -497,22 +476,18 @@ confirmBtn?.addEventListener('click', async () => {
     return;
   }
 
-  setBusy(false);
   if (!res?.ok) {
-    // Keep preview open so Confirm retains a user-gesture path (e.g. needsPermission).
-    organizePhase = 'preview';
-    if (scopeSelect) scopeSelect.disabled = true;
+    setOrganizeIdle();
     organizeStatus.textContent = res?.needsLlmConfig
       ? res.error ||
         'LLM not configured — open Options and set provider + API key before Organize.'
       : res?.needsPermission
-        ? `${res.error || 'Host permission missing.'} Confirm again after granting access.`
+        ? `${res.error || 'Host permission missing.'} Organize again after granting access.`
         : res?.error || 'Organize failed';
     return;
   }
-  hidePreview();
-  organizePhase = 'idle';
-  setOrganizeProgressVisible(false);
+
+  setOrganizeIdle();
   const topics = res.logical?.length ?? 0;
   const applied = res.physical?.applied ?? 0;
   const reclaimed = Number(res.merge?.reclaimed) || 0;
@@ -526,6 +501,65 @@ confirmBtn?.addEventListener('click', async () => {
   if (reclaimed > 0) refreshStacks();
 });
 
+cancelBtn?.addEventListener('click', async () => {
+  const phase = organizePhase;
+  const cancelledRunId = organizeRunId;
+  // Invalidate any in-flight Organize handler (permission await or GROUP_TABS).
+  organizeRunId = nextOrganizeRunId();
+
+  if (isIdleOrganizeCancel(phase)) {
+    // Only cancel a job this panel knows about — never bare cancelActive (other windows).
+    const jobToCancel = activeJobId || knownAlarmJobId;
+    if (jobToCancel) {
+      suppressJob(jobToCancel);
+      sendToBackground(MSG.CANCEL_GROUP, { jobId: jobToCancel }).catch(() => {});
+      knownAlarmJobId = null;
+    }
+    setOrganizeIdle();
+    lastLlmCallsAttempted = 0;
+    lastClassified = 0;
+    organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
+    return;
+  }
+
+  if (phase === 'permissions') {
+    // Permission step — preemptive clientRunId cancel only (no cross-window abort).
+    setOrganizeIdle();
+    lastLlmCallsAttempted = 0;
+    lastClassified = 0;
+    organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
+    sendToBackground(MSG.CANCEL_GROUP, { clientRunId: cancelledRunId }).catch(() => {});
+    return;
+  }
+
+  if (phase === 'running' || phase === 'cancelling') {
+    organizePhase = 'cancelling';
+    organizeStatus.textContent = 'Cancelling…';
+    const jobIdToCancel = activeJobId || knownAlarmJobId;
+    const cancelRes = await sendToBackground(MSG.CANCEL_GROUP, {
+      clientRunId: cancelledRunId,
+      jobId: jobIdToCancel || undefined,
+    }).catch(() => ({ ok: false }));
+    // Suppress only when SW confirmed cancel / cleared pending — otherwise a
+    // not-yet-started INTERRUPTED job could stay suppressed while still queued.
+    if (cancelRes?.cancelled || cancelRes?.hadActiveJob || cancelRes?.clearedPending) {
+      suppressJob(jobIdToCancel);
+      knownAlarmJobId = null;
+    }
+    // Organize click handler will refine copy from the cancelled job result when it returns;
+    // show best-known progress counts immediately (never invent "no LLM" if we saw calls).
+    organizeStatus.textContent = formatOrganizeCancelMessage({
+      llmCallsAttempted: lastLlmCallsAttempted,
+      classified: lastClassified,
+    });
+    setOrganizeIdle();
+    return;
+  }
+
+  setOrganizeIdle();
+  organizeStatus.textContent = formatOrganizeCancelMessage({ llmCallsAttempted: 0 });
+});
+
 onBackgroundBroadcast((message) => {
   if (message.type === MSG.STACKS_OVERFLOW_WARN) {
     showStacksOverflow(message?.needsUserAction ? message : null);
@@ -535,13 +569,7 @@ onBackgroundBroadcast((message) => {
   if (message.type === MSG.CONFIG_UPDATED) {
     // Always refresh Stacks so a cleared overflow gate hides Export/Discard.
     refreshStacks();
-    if (pendingPreview) {
-      organizeRunId = nextOrganizeRunId();
-      hidePreview();
-      setOrganizeIdle();
-      organizeStatus.textContent =
-        'Settings changed — run Organize again to refresh the privacy preview.';
-    }
+    void refreshCachedOrganizeConfig();
     return;
   }
   if (message.type === MSG.JOB_STATE) {
@@ -567,7 +595,7 @@ onBackgroundBroadcast((message) => {
   if (typeof message.jobId === 'string' && suppressedJobIds.has(message.jobId)) {
     return;
   }
-  if (organizePhase === 'idle' || organizePhase === 'preview' || organizePhase === 'confirming') {
+  if (organizePhase === 'idle' || organizePhase === 'permissions') {
     return;
   }
   if (typeof message.jobId === 'string') {
@@ -959,8 +987,35 @@ function escapeHtml(s) {
     .replaceAll('"', '&quot;');
 }
 
+// Keep Organize disabled until config hydrate completes (or fails recoverably).
+syncOrganizeEnabled();
+if (organizeStatus && !organizeConfigReady) {
+  organizeStatus.textContent = 'Loading settings…';
+}
+
+chrome.storage?.onChanged?.addListener((changes, area) => {
+  if (area !== 'local' || !changes?.[STORAGE_KEYS.CONFIG]) return;
+  rememberOrganizeConfig(changes[STORAGE_KEYS.CONFIG].newValue || {});
+  organizeConfigReady = true;
+  organizeConfigLoadFailed = false;
+  syncOrganizeEnabled();
+});
+
 refreshStacks();
 refreshLogicalTopics();
+void refreshCachedOrganizeConfig().then(() => {
+  if (!organizeBusy && organizePhase === 'idle' && organizeStatus) {
+    if (!organizeConfigReady) {
+      organizeStatus.textContent =
+        'Could not load settings. Click Organize to retry.';
+    } else if (
+      organizeStatus.textContent === 'Loading settings…' ||
+      !organizeStatus.textContent
+    ) {
+      organizeStatus.textContent = ORGANIZE_READY_STATUS;
+    }
+  }
+});
 // Reopened panel: adopt in-flight alarm resume if SW already has a checkpoint.
 sendToBackground(MSG.GET_JOB_STATE)
   .then((state) => {

@@ -37,7 +37,7 @@
       <section class="sp-hero" aria-labelledby="organize-heading">
         <h2 id="organize-heading" class="sp-hero-title">Organize</h2>
         <p class="sp-hero-lede">
-          Classify tabs, keep the newest open, merge into one window — LLM only after you confirm.
+          One click classifies tabs, keeps the newest open, and merges into one window.
         </p>
         <div class="sp-hero-controls">
           <label class="sp-label" for="group-scope">Scope</label>
@@ -46,25 +46,15 @@
             <option value="current">Current window only</option>
           </select>
         </div>
-        <button type="button" id="btn-organize" class="sp-cta sp-cta-hero">Organize tabs</button>
+        <div class="sp-row sp-actions sp-organize-actions">
+          <button type="button" id="btn-organize" class="sp-cta sp-cta-hero">Organize tabs</button>
+          <button type="button" id="btn-cancel-organize" class="sp-secondary">Cancel</button>
+        </div>
         <p id="organize-status" class="sp-status" role="status">
-          Preview fields, then confirm before any real classify call.
+          Ready — Organize applies LLM topics immediately (Cancel stops an in-flight job).
         </p>
         <div class="sp-progress-track" id="organize-progress-track" hidden>
           <div class="sp-progress-bar" id="organize-progress-bar"></div>
-        </div>
-
-        <div id="organize-preview" class="sp-preview-panel" hidden>
-          <h3 class="sp-subhead">Privacy preview</h3>
-          <p id="organize-preview-summary" class="sp-help"></p>
-          <ul id="organize-preview-fields" class="sp-field-list"></ul>
-          <pre id="organize-preview-samples" class="sp-pre" hidden></pre>
-          <div class="sp-row sp-actions">
-            <button type="button" id="btn-confirm-organize" class="sp-cta">
-              Confirm &amp; classify
-            </button>
-            <button type="button" id="btn-cancel-organize" class="sp-secondary">Cancel</button>
-          </div>
         </div>
       </section>
 
@@ -130,7 +120,9 @@
 
       <section class="sp-section" aria-labelledby="preview-heading">
         <h2 id="preview-heading">Field preview</h2>
-        <p class="sp-help">Inspect classify fields for the active tab without starting Organize.</p>
+        <p class="sp-help">
+          Inspect classify fields for the active tab without starting Organize (informational only).
+        </p>
         <button type="button" id="btn-preview" class="sp-secondary">Preview classify fields</button>
         <pre id="preview-out" class="sp-pre" hidden></pre>
       </section>

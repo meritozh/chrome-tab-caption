@@ -44,9 +44,9 @@ export function originPatternFromEndpoint(endpointBaseUrl) {
 }
 
 /**
- * Build origin list for Organize confirm (LLM endpoint + extract hosts).
+ * Build origin list for Organize (LLM endpoint + extract hosts).
  * When `includeAllProviderDefaults` is true, also grant both Anthropic and OpenAI
- * public hosts so a stale preview (config changed after preview) still matches live fetch.
+ * public hosts so a stale Options config still matches live fetch.
  * @param {{
  *   endpointBaseUrl?: string,
  *   provider?: string,

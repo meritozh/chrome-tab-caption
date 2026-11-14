@@ -761,7 +761,7 @@ function onMessage(message, sender, sendResponse) {
 
         // Abort when jobId matches, OR when clientRunId matches the active job.
         // Side panels mint unique clientRunIds (timestamp+random), so clientRunId
-        // abort is safe across windows and covers Cancel after Confirm enters
+        // abort is safe across windows and covers Cancel after Organize enters
         // running but before the first GROUP_PROGRESS delivers jobId.
         const matchActive =
           !!activeOrganizeJob &&
@@ -817,14 +817,6 @@ function onMessage(message, sender, sendResponse) {
       }
       case MSG.GROUP_TABS: {
         const config = await loadConfig();
-        if (!message.confirmed) {
-          sendResponse({
-            ok: false,
-            needsConfirm: true,
-            error: 'Confirm privacy preview before Organize (ADR #12).',
-          });
-          break;
-        }
         if (!isLlmConfigured(config)) {
           sendResponse({
             ok: false,

@@ -4,8 +4,9 @@
  * (cross-window tabs.move allowed) → physical tabGroups by topic.
  * No auto-group on tab complete.
  *
- * Flow: privacy preview (UI) → quick pass (cache hits) → refine queue (miss/stale)
+ * Flow: Side Panel Organize click → quick pass (cache hits) → refine queue (miss/stale)
  * → classify → reclaim excess → merge kept into one window → apply groups.
+ * LLM results apply immediately (no Confirm / preview gate).
  */
 
 import { MSG, TIMEOUTS, TAB_GROUP_ID_NONE } from '../shared/constants.js';
@@ -140,7 +141,7 @@ export async function buildGroupPayloadPreview(opts) {
       'model',
       'endpointBaseUrl',
     ],
-    note: 'API key is never shown. Confirm to run classify on cache misses only.',
+    note: 'API key is never shown. Cache misses are classified on Organize (no confirm step).',
     samples,
     privacyShowFieldsPreview: true,
   };
@@ -253,7 +254,7 @@ async function emitCheckpoint(onCheckpoint, checkpoint) {
  * @param {object} opts
  * @param {'all' | 'current'} [opts.scope]
  * @param {number} [opts.currentWindowId]
- * @param {boolean} [opts.confirmed] — must be true after privacy preview
+ * @param {boolean} [opts.confirmed] — legacy; Organize no longer gates on Confirm (always proceeds)
  * @param {TopicCacheLru} opts.topicCache
  * @param {Record<string, unknown>} opts.config
  * @param {AbortSignal} [opts.signal] — cooperative cancel between classify steps
@@ -270,14 +271,6 @@ async function emitCheckpoint(onCheckpoint, checkpoint) {
  * @param {{ push: (e: object) => object }} [opts.activityLog]
  */
 export async function groupTabsOnDemand(opts) {
-  if (!opts.confirmed && !opts.resumeFrom?.confirmed) {
-    return {
-      ok: false,
-      error: 'Privacy preview confirmation required before classify (ADR #12).',
-      needsConfirm: true,
-    };
-  }
-
   const resuming = isOrganizeCheckpoint(opts.resumeFrom);
   const resumeCp = resuming ? opts.resumeFrom : null;
   const scope = resuming
@@ -613,7 +606,7 @@ export async function groupTabsOnDemand(opts) {
       return {
         ok: false,
         error:
-          'Host permission for the LLM endpoint is missing. Confirm Organize again after granting access.',
+          'Host permission for the LLM endpoint is missing. Run Organize again after granting access.',
         needsPermission: true,
         needsLlmConfig: false,
       };
