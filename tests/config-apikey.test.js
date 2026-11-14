@@ -6,6 +6,7 @@ import {
   sanitizeConfigPatch,
   saveConfig,
   redactConfigForUi,
+  resolveTestLlmConfig,
 } from '../shared/config.js';
 import { STORAGE_KEYS } from '../shared/constants.js';
 
@@ -79,5 +80,72 @@ describe('groupScope migration', () => {
     const cfg = mergeConfig({ groupScope: 'cross-window-logical', maxOpenTabs: 40 });
     assert.equal(cfg.groupScope, 'single-window-merge');
     assert.equal(cfg.maxOpenTabs, 40);
+  });
+});
+
+describe('resolveTestLlmConfig (Options Test ↔ TEST_LLM)', () => {
+  it('uses stored config when form override is missing', () => {
+    const resolved = resolveTestLlmConfig(
+      {
+        llmProvider: 'anthropic',
+        endpointBaseUrl: 'https://api.anthropic.com',
+        apiKey: 'sk-stored',
+        model: 'claude-stored',
+      },
+      null,
+    );
+    assert.equal(resolved.llmProvider, 'anthropic');
+    assert.equal(resolved.endpointBaseUrl, 'https://api.anthropic.com');
+    assert.equal(resolved.apiKey, 'sk-stored');
+    assert.equal(resolved.model, 'claude-stored');
+  });
+
+  it('overlays unsaved form provider/endpoint/model onto stored key', () => {
+    const resolved = resolveTestLlmConfig(
+      {
+        llmProvider: 'anthropic',
+        endpointBaseUrl: 'https://api.anthropic.com',
+        apiKey: 'sk-stored',
+        model: 'old-model',
+      },
+      {
+        llmProvider: 'openai-responses',
+        endpointBaseUrl: 'https://api.openai.com',
+        apiKey: '',
+        model: 'gpt-unsaved',
+      },
+    );
+    assert.equal(resolved.llmProvider, 'openai-responses');
+    assert.equal(resolved.endpointBaseUrl, 'https://api.openai.com');
+    assert.equal(resolved.apiKey, 'sk-stored');
+    assert.equal(resolved.model, 'gpt-unsaved');
+  });
+
+  it('uses unsaved form apiKey when present (not redacted)', () => {
+    const resolved = resolveTestLlmConfig(
+      { llmProvider: 'anthropic', apiKey: 'sk-old', model: 'm' },
+      {
+        llmProvider: 'anthropic',
+        endpointBaseUrl: 'https://gateway.example/v1',
+        apiKey: 'sk-unsaved-new',
+        model: 'm2',
+      },
+    );
+    assert.equal(resolved.apiKey, 'sk-unsaved-new');
+    assert.equal(resolved.endpointBaseUrl, 'https://gateway.example/v1');
+    assert.equal(resolved.model, 'm2');
+  });
+
+  it('keeps stored apiKey when form sends redacted sentinel', () => {
+    const resolved = resolveTestLlmConfig(
+      { llmProvider: 'anthropic', apiKey: 'sk-keep', endpointBaseUrl: 'https://a.test' },
+      {
+        llmProvider: 'anthropic',
+        apiKey: API_KEY_REDACTED,
+        endpointBaseUrl: 'https://b.test',
+      },
+    );
+    assert.equal(resolved.apiKey, 'sk-keep');
+    assert.equal(resolved.endpointBaseUrl, 'https://b.test');
   });
 });

@@ -86,3 +86,28 @@ export function redactConfigForUi(config) {
   }
   return copy;
 }
+
+/**
+ * Resolve LLM fields for Options → TEST_LLM.
+ * Overlays an unsaved form patch on stored config so permission grant and ping
+ * target the same provider/endpoint/key/model. Empty/redacted apiKey in the
+ * form keeps the stored secret (same as Save).
+ *
+ * @param {Partial<typeof DEFAULT_CONFIG> | Record<string, unknown> | null | undefined} stored
+ * @param {Partial<typeof DEFAULT_CONFIG> | Record<string, unknown> | null | undefined} formOverride
+ * @returns {typeof DEFAULT_CONFIG & Record<string, unknown>}
+ */
+export function resolveTestLlmConfig(stored, formOverride) {
+  const base = mergeConfig(stored);
+  if (!formOverride || typeof formOverride !== 'object') {
+    return base;
+  }
+  /** @type {Record<string, unknown>} */
+  const llmPatch = {};
+  for (const key of ['llmProvider', 'endpointBaseUrl', 'apiKey', 'model']) {
+    if (key in formOverride) {
+      llmPatch[key] = formOverride[key];
+    }
+  }
+  return mergeConfig({ ...base, ...sanitizeConfigPatch(llmPatch) });
+}

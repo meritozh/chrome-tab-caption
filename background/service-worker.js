@@ -10,7 +10,13 @@
  */
 
 import { MSG, DEFAULT_CONFIG, SESSION_KEYS, TIMEOUTS, STORAGE_KEYS } from '../shared/constants.js';
-import { loadConfig, saveConfig, redactConfigForUi, mergeConfig } from '../shared/config.js';
+import {
+  loadConfig,
+  saveConfig,
+  redactConfigForUi,
+  mergeConfig,
+  resolveTestLlmConfig,
+} from '../shared/config.js';
 import {
   buildClassifyPayloadPreview,
   createLlmClient,
@@ -968,8 +974,12 @@ function onMessage(message, sender, sendResponse) {
         break;
       }
       case MSG.TEST_LLM: {
-        // Real endpoint ping — no mock. Options page should request host permission first.
-        const config = mergeConfig(await loadConfig());
+        // Real endpoint ping — no mock. Prefer Options form override so permission
+        // grant and ping use the same unsaved provider/endpoint/key/model.
+        const stored = mergeConfig(await loadConfig());
+        const formOverride =
+          message.config && typeof message.config === 'object' ? message.config : null;
+        const config = resolveTestLlmConfig(stored, formOverride);
         if (!isLlmConfigured(config)) {
           sendResponse({
             ok: false,
@@ -1024,13 +1034,15 @@ function onMessage(message, sender, sendResponse) {
             stub: false,
             preview,
             result,
-            note: 'Live LLM ping succeeded (real classify against your configured endpoint).',
+            usedFormOverride: Boolean(formOverride),
+            note: 'Live LLM ping succeeded (real classify against the Options form / stored endpoint).',
           });
         } catch (err) {
           sendResponse({
             ok: false,
             stub: false,
             preview,
+            usedFormOverride: Boolean(formOverride),
             error: `LLM connection failed: ${err?.message || err}`,
           });
         }

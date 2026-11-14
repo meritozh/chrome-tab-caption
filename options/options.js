@@ -154,9 +154,16 @@ document.getElementById('btn-test-llm')?.addEventListener('click', async () => {
       'Host permission denied. Grant LLM endpoint access, then Test connection again.';
     return;
   }
+  // Pass the same in-form LLM fields used for permission so unsaved edits are pinged.
   const res = await sendToBackground(MSG.TEST_LLM, {
     url: 'https://example.com/connection-test',
     title: 'Connection test',
+    config: {
+      llmProvider: form.llmProvider,
+      endpointBaseUrl: form.endpointBaseUrl,
+      apiKey: form.apiKey,
+      model: form.model,
+    },
   });
   status.textContent = res?.ok
     ? `Live OK — topic “${res.result?.topic ?? '?'}”. Endpoint reachable.`
