@@ -26,8 +26,7 @@ export const MESSAGES = {
     'organize.btn': 'Organize tabs',
     'organize.reorganize': 'Reorganize',
     'organize.cancel': 'Cancel',
-    'organize.ready':
-      'Ready — Organize applies LLM topics immediately (Cancel stops an in-flight job).',
+    'organize.ready': 'Ready',
     'organize.reorganizeHint':
       'Reorganize clears the topic cache and re-classifies every open tab and Stack.',
     'organize.loadingSettings': 'Loading settings…',
@@ -141,7 +140,7 @@ export const MESSAGES = {
     'organize.btn': '整理标签页',
     'organize.reorganize': '重新整理',
     'organize.cancel': '取消',
-    'organize.ready': '就绪 — 整理会立即应用 LLM 主题（取消可中止进行中的任务）。',
+    'organize.ready': '就绪',
     'organize.reorganizeHint': '重新整理会清空主题缓存，并对所有打开标签页与堆栈重新分类。',
     'organize.loadingSettings': '正在加载设置…',
     'organize.settingsRetry': '无法加载设置。请再次点击整理重试。',

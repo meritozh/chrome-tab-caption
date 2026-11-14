@@ -1,5 +1,5 @@
 /**
- * Side Panel — primary Organize UI (one-click apply), Search, Stacks.
+ * Side Panel — compact Organize (fixed all→single scope), Stacks search, Stacks.
  * Toolbar icon toggles this panel; Options is settings-only.
  * No LLM side-effects here; messages go to the service worker.
  */
@@ -209,7 +209,8 @@ const reorganizeBtn = document.getElementById('btn-reorganize');
 const cancelBtn = document.getElementById('btn-cancel-organize');
 const organizeStatus = document.getElementById('organize-status');
 const progressTrack = document.getElementById('organize-progress-track');
-const scopeSelect = /** @type {HTMLSelectElement | null} */ (document.getElementById('group-scope'));
+/** Organize scope is fixed: all windows → single window (no UI selector). */
+const ORGANIZE_SCOPE = 'all';
 const localeSelect = /** @type {HTMLSelectElement | null} */ (document.getElementById('ui-locale'));
 
 function setOrganizeProgressVisible(visible) {
@@ -275,7 +276,6 @@ function setBusy(busy) {
   syncOrganizeEnabled();
   // Cancel stays enabled so the user can abort permission / running jobs.
   if (cancelBtn) cancelBtn.disabled = false;
-  if (scopeSelect) scopeSelect.disabled = busy;
   if (localeSelect) localeSelect.disabled = busy;
   if (!busy) setOrganizeProgressVisible(false);
 }
@@ -568,7 +568,7 @@ async function startOrganizeJob(mode = 'organize') {
   setOrganizeStatus(reorganize ? 'organize.reorganizing' : 'organize.busy');
   setOrganizeProgressVisible(true);
 
-  const scope = scopeSelect?.value === 'current' ? 'current' : 'all';
+  const scope = ORGANIZE_SCOPE;
   // Sync cache read only — FIRST await must be permissions.request (user gesture).
   const cached = cachedOrganizeConfig;
   const provider = cached.llmProvider || '';
@@ -893,11 +893,22 @@ let searchRequestId = 0;
 let flatSearchHits = [];
 /** @type {number} */
 let activeSearchIndex = -1;
+/** Active query used to filter the Stacks virtual list (null = show all). */
+/** @type {string | null} */
+let activeStacksFilterQuery = null;
+/** Ordered stack ids from the latest fuzzy search (null = unfiltered). */
+/** @type {string[] | null} */
+let filteredStackIds = null;
 
 function setSearchStatus(text, { hidden = !text } = {}) {
   if (!searchStatus) return;
   searchStatus.hidden = hidden;
   searchStatus.textContent = text || '';
+}
+
+function clearStacksSearchFilter() {
+  activeStacksFilterQuery = null;
+  filteredStackIds = null;
 }
 
 /**
@@ -911,7 +922,10 @@ function renderSearchResults(res, query, fail = null) {
   if (!query) {
     flatSearchHits = [];
     activeSearchIndex = -1;
-    searchResults.innerHTML = `<p class="sp-muted">${escapeHtml(tt('search.emptyPrompt'))}</p>`;
+    clearStacksSearchFilter();
+    searchResults.hidden = true;
+    searchResults.innerHTML = '';
+    applyStacksDisplay();
     return;
   }
 
@@ -920,7 +934,10 @@ function renderSearchResults(res, query, fail = null) {
   if (transportError || workerError) {
     flatSearchHits = [];
     activeSearchIndex = -1;
+    clearStacksSearchFilter();
+    applyStacksDisplay();
     const msg = transportError || workerError;
+    searchResults.hidden = false;
     searchResults.innerHTML = `<p class="sp-muted">${escapeHtml(
       tt('search.error', { msg: String(msg) }),
     )}</p>`;
@@ -933,17 +950,31 @@ function renderSearchResults(res, query, fail = null) {
   flatSearchHits = [...open, ...stacked];
   activeSearchIndex = flatSearchHits.length ? 0 : -1;
 
+  activeStacksFilterQuery = query;
+  filteredStackIds = stacked
+    .map((hit) => (typeof hit.stackId === 'string' ? hit.stackId : null))
+    .filter(Boolean);
+  applyStacksDisplay();
+
   if (!flatSearchHits.length) {
+    // Message lives in the results strip; list stays empty under the filter.
+    searchResults.hidden = false;
     searchResults.innerHTML = `<p class="sp-muted">${escapeHtml(
       tt('search.noMatches', { query }),
     )}</p>`;
     return;
   }
 
-  const parts = [];
-  parts.push(renderSearchPartition('open', open, 0));
-  parts.push(renderSearchPartition('stacked', stacked, open.length));
-  searchResults.innerHTML = parts.join('');
+  // Open-tab hits stay in the compact results strip; stacked hits drive the list filter.
+  if (!open.length) {
+    searchResults.hidden = true;
+    searchResults.innerHTML = '';
+    syncSearchActiveClass();
+    return;
+  }
+
+  searchResults.hidden = false;
+  searchResults.innerHTML = renderSearchPartition('open', open, 0);
   syncSearchActiveClass();
 }
 
@@ -1280,6 +1311,9 @@ function renderStackCard(stack) {
 const stacksViewport = document.getElementById('stacks-viewport');
 /** @type {ReturnType<typeof mountVirtualList> | null} */
 let stacksVirtual = null;
+/** Full Stacks snapshot from the last GET_STACKS (search filters a view of this). */
+/** @type {object[]} */
+let cachedStacks = [];
 
 function ensureStacksVirtual() {
   if (!stacksViewport || stacksVirtual) return stacksVirtual;
@@ -1293,32 +1327,63 @@ function ensureStacksVirtual() {
   return stacksVirtual;
 }
 
-function showStacksEmpty() {
+/**
+ * @param {string | null | undefined} message
+ *   `undefined`/`null` → default empty copy; `''` → blank viewport (search owns the message).
+ */
+function showStacksEmpty(message) {
   if (!stacksViewport) return;
   if (stacksVirtual) {
     stacksVirtual.destroy();
     stacksVirtual = null;
   }
   stacksViewport.replaceChildren();
+  if (message === '') return;
   const empty = document.createElement('p');
   empty.className = 'sp-muted sp-stacks-empty';
-  empty.textContent = tt('stacks.empty');
+  empty.textContent = message == null ? tt('stacks.empty') : message;
   stacksViewport.append(empty);
+}
+
+/**
+ * Render Stacks list, optionally filtered by the active fuzzy search.
+ */
+function applyStacksDisplay() {
+  if (!stacksViewport) return;
+
+  if (!cachedStacks.length) {
+    showStacksEmpty();
+    return;
+  }
+
+  /** @type {object[]} */
+  let items = cachedStacks;
+  if (filteredStackIds) {
+    const byId = new Map(
+      cachedStacks.map((stack) => [String(stack.id || ''), stack]),
+    );
+    items = filteredStackIds
+      .map((id) => byId.get(id))
+      .filter(Boolean);
+    if (!items.length) {
+      // Prefer the search-results strip for "no matches"; keep viewport blank.
+      showStacksEmpty(
+        activeStacksFilterQuery ? '' : tt('stacks.empty'),
+      );
+      return;
+    }
+  }
+
+  const list = ensureStacksVirtual();
+  list?.setItems(items);
 }
 
 async function refreshStacks() {
   if (!stacksViewport) return;
   const res = await sendToBackground(MSG.GET_STACKS).catch(() => null);
-  const stacks = Array.isArray(res?.stacks) ? res.stacks : [];
+  cachedStacks = Array.isArray(res?.stacks) ? res.stacks : [];
   showStacksOverflow(res?.overflowPending);
-
-  if (!stacks.length) {
-    showStacksEmpty();
-    return;
-  }
-
-  const list = ensureStacksVirtual();
-  list?.setItems(stacks);
+  applyStacksDisplay();
 }
 
 stacksViewport?.addEventListener('click', (e) => {
