@@ -6,6 +6,7 @@
  */
 
 import { MSG } from '../shared/constants.js';
+import { resolveTopicCacheSize } from '../shared/config.js';
 import { createStackRecord, persistStackRecords } from '../shared/stack-records.js';
 import {
   evaluateStackCapacity,
@@ -265,7 +266,7 @@ export async function finalizeSingleWindowOrganize(opts) {
       summary.overflow = true;
       summary.overflowPending = opts.overflowPending;
     } else {
-      const stackSize = Math.max(1, Number(config.stackSize) || 500);
+      const stackSize = resolveTopicCacheSize(config);
       stackStore.maxSize = stackSize;
       const capacity = evaluateStackCapacity({
         size: stackStore.size,

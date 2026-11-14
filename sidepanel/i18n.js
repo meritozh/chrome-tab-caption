@@ -129,6 +129,7 @@ export const MESSAGES = {
     'settings.testFail': 'Failed: {error}',
     'settings.testPermissionDenied':
       'Host permission denied. Grant LLM endpoint access, then Test connection again.',
+    'settings.topicCacheSize': 'topicCacheSize',
     'settings.autoDedupe': 'Auto-dedupe',
     'settings.dedupeMode': 'Mode',
     'settings.extraction': 'Extract excerpt',
@@ -267,6 +268,7 @@ export const MESSAGES = {
     'settings.testFail': '失败：{error}',
     'settings.testPermissionDenied':
       '未授予主机权限。请允许 LLM 端点访问后再次测试连接。',
+    'settings.topicCacheSize': 'topicCacheSize',
     'settings.autoDedupe': '自动去重',
     'settings.dedupeMode': '模式',
     'settings.extraction': '抽取摘要',

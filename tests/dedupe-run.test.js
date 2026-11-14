@@ -386,7 +386,7 @@ describe('dedupe before reclaim', () => {
     const result = await maybeReclaim({
       config: {
         maxOpenTabs: 3,
-        stackSize: 500,
+        topicCacheSize: 500,
         autoStackEnabled: true,
         autoDedupeEnabled: true,
         dedupeMode: 'auto-close-older',

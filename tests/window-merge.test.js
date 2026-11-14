@@ -226,7 +226,7 @@ describe('window-merge chrome helpers (mocked)', () => {
       ],
       config: {
         maxOpenTabs: 2,
-        stackSize: 500,
+        topicCacheSize: 500,
         autoStackEnabled: true,
         autoDedupeEnabled: false,
         groupScope: 'single-window-merge',

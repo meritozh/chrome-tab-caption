@@ -188,7 +188,7 @@ describe('maybeReclaim + tabActivity (switch-to-grouped regression)', () => {
 
     const store = new StackRecordStore(500);
     const result = await maybeReclaim({
-      config: { maxOpenTabs: 2, stackSize: 500, autoStackEnabled: true },
+      config: { maxOpenTabs: 2, topicCacheSize: 500, autoStackEnabled: true },
       stackStore: store,
       closingTabIds: new Set(),
       tabsApi,

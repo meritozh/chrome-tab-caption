@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Pixel-aligned 16x16 source. Integer coords only; full-bleed plate. -->
+<!-- Pixel-aligned 16x16 source. Integer coords; slight plate radius. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <rect width="16" height="16" fill="#0f766e"/>
+  <rect width="16" height="16" rx="3" ry="3" fill="#0f766e"/>
   <rect x="2" y="3" width="8" height="5" rx="1" fill="#5eead4"/>
   <rect x="5" y="7" width="9" height="6" rx="1" fill="#f0fdfa"/>
   <rect x="7" y="9" width="5" height="2" fill="#0f766e"/>

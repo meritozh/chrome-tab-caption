@@ -2,9 +2,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none" role="img" aria-label="chrome-tab-caption">
   <!--
     Master vector mark (128 viewBox, integer coords).
-    Full-bleed plate — Chrome applies its own corner mask; do not pre-round the canvas.
+    Slight plate radius (~16% / rx=20) — softens harsh square edges without
+    becoming a circle. Transparent outside the plate.
   -->
-  <rect width="128" height="128" fill="#0f766e"/>
+  <rect width="128" height="128" rx="20" ry="20" fill="#0f766e"/>
 
   <!-- Stacked tabs: back -> mid -> front -->
   <rect x="20" y="22" width="64" height="38" rx="8" fill="#5eead4"/>

@@ -16,6 +16,7 @@ import {
   redactConfigForUi,
   mergeConfig,
   resolveTestLlmConfig,
+  resolveTopicCacheSize,
 } from '../shared/config.js';
 import {
   buildClassifyPayloadPreview,
@@ -61,9 +62,9 @@ import { isTerminalPhase, JOB_PHASES } from '../shared/task-state.js';
 import { shouldScheduleReclaimAfterOrganize } from '../shared/organize-reclaim.js';
 
 /** @type {TopicCacheLru} */
-let topicCache = new TopicCacheLru(DEFAULT_CONFIG.cacheSize);
+let topicCache = new TopicCacheLru(DEFAULT_CONFIG.topicCacheSize);
 /** @type {StackRecordStore} */
-let stackStore = new StackRecordStore(DEFAULT_CONFIG.stackSize);
+let stackStore = new StackRecordStore(DEFAULT_CONFIG.topicCacheSize);
 /** @type {import('../shared/metrics.js').LocalMetrics} */
 let localMetrics = mergeMetrics(null);
 /** @type {import('../shared/task-state.js').OrganizeCheckpoint | null} */
@@ -181,24 +182,37 @@ async function closeSidePanel(windowId) {
 
 /**
  * Toggle Side Panel for the window that owns `tab`.
+ *
+ * Chrome requires `sidePanel.open()` in the same synchronous turn as the
+ * action click gesture — awaiting `setOptions` (or any Promise) first drops
+ * the gesture and open fails. `openPanelOnActionClick: true` only opens and
+ * never closes (MV3 has no `sidePanel.close`), so we keep manual toggle.
+ *
  * @param {chrome.tabs.Tab} tab
  */
-async function toggleSidePanelForTab(tab) {
+function toggleSidePanelForTab(tab) {
   const windowId = typeof tab?.windowId === 'number' ? tab.windowId : null;
   if (windowId == null) return;
   const state = panelState(windowId);
   if (state.open || state.ports.size > 0) {
-    await closeSidePanel(windowId);
+    void closeSidePanel(windowId);
     return;
   }
   try {
-    await chrome.sidePanel.setOptions({
-      windowId,
-      enabled: true,
-      path: 'sidepanel/sidepanel.html',
-    });
-    await chrome.sidePanel.open({ windowId });
+    // open() first / synchronously — do not await setOptions beforehand.
+    const openPromise = chrome.sidePanel.open({ windowId });
+    void chrome.sidePanel
+      .setOptions({
+        windowId,
+        enabled: true,
+        path: 'sidepanel/sidepanel.html',
+      })
+      .catch((err) => console.warn('[tab-caption] setOptions failed', err));
     state.open = true;
+    void openPromise.catch((err) => {
+      console.warn('[tab-caption] openSidePanel failed', err);
+      state.open = false;
+    });
   } catch (err) {
     console.warn('[tab-caption] openSidePanel failed', err);
     state.open = false;
@@ -209,29 +223,47 @@ async function toggleSidePanelForTab(tab) {
 let panelBehaviorInitialized = false;
 
 async function initPanelBehavior() {
-  // Manual toggle via action.onClicked — openPanelOnActionClick cannot close.
+  // Register onClicked before awaiting setPanelBehavior so a cold-start click
+  // is not dropped. openPanelOnActionClick must stay false so onClicked fires
+  // (true would open-only and suppress onClicked — cannot toggle close).
+  if (!panelBehaviorInitialized) {
+    try {
+      chrome.action.onClicked.addListener((tab) => {
+        toggleSidePanelForTab(tab);
+      });
+      panelBehaviorInitialized = true;
+    } catch (err) {
+      console.warn('[tab-caption] action.onClicked failed', err);
+      return;
+    }
+  }
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
   } catch (err) {
     console.warn('[tab-caption] setPanelBehavior failed', err);
   }
-  if (panelBehaviorInitialized) return;
-  panelBehaviorInitialized = true;
-  try {
-    chrome.action.onClicked.addListener((tab) => {
-      void toggleSidePanelForTab(tab);
-    });
-  } catch (err) {
-    panelBehaviorInitialized = false;
-    console.warn('[tab-caption] action.onClicked failed', err);
-  }
 }
 
 async function hydrateFromStorage() {
   const config = await loadConfig();
-  topicCache = await loadTopicCache(config.cacheSize);
-  stackStore = await loadStackRecords(config.stackSize);
+  const capacity = resolveTopicCacheSize(config);
+  topicCache = await loadTopicCache(capacity);
+  stackStore = await loadStackRecords(capacity);
   localMetrics = await loadMetrics();
+  // One-shot migration: rewrite stored config without legacy cacheSize/stackSize.
+  try {
+    const raw = await chrome.storage.local.get(STORAGE_KEYS.CONFIG);
+    const stored = raw?.[STORAGE_KEYS.CONFIG];
+    if (
+      stored &&
+      typeof stored === 'object' &&
+      ('cacheSize' in stored || 'stackSize' in stored)
+    ) {
+      await saveConfig({ topicCacheSize: capacity });
+    }
+  } catch {
+    // migration is best-effort / storage may be unavailable in tests
+  }
   // Restore logical topics across SW restarts (session-scoped).
   try {
     const stored = await chrome.storage.session.get([
@@ -255,7 +287,7 @@ async function hydrateFromStorage() {
   } catch {
     // session storage may be unavailable
   }
-  // Over-capacity after hydrate (e.g. stackSize shrunk) — warn, never silent trim.
+  // Over-capacity after hydrate (e.g. topicCacheSize shrunk) — warn, never silent trim.
   if (stackStore.size > stackStore.maxSize) {
     const pending = buildOverflowPending({
       size: stackStore.size,
@@ -698,10 +730,11 @@ function onMessage(message, sender, sendResponse) {
       }
       case MSG.SET_CONFIG: {
         const next = await saveConfig(message.patch ?? {});
-        topicCache.maxSize = Math.max(1, Number(next.cacheSize) || DEFAULT_CONFIG.cacheSize);
+        const capacity = resolveTopicCacheSize(next);
+        topicCache.maxSize = capacity;
         topicCache._evict();
         await persistTopicCache(topicCache);
-        stackStore.maxSize = Math.max(1, Number(next.stackSize) || DEFAULT_CONFIG.stackSize);
+        stackStore.maxSize = capacity;
         // Never silent-trim on shrink — warn → export/discard. Clear gate when capacity fits.
         if (stackStore.size > stackStore.maxSize) {
           const pending = buildOverflowPending({

@@ -22,7 +22,7 @@ function makeRoot(values = {}) {
           ? 'select'
           : name === 'apiKey'
             ? 'password'
-            : ['maxOpenTabs', 'cacheSize', 'stackSize', 'dailyLlmQuota'].includes(name)
+            : ['maxOpenTabs', 'topicCacheSize', 'dailyLlmQuota'].includes(name)
               ? 'number'
               : 'text';
     const def = values[name] ?? DEFAULT_CONFIG[name] ?? '';
@@ -45,6 +45,9 @@ describe('options-form helpers', () => {
   it('lists expected config fields', () => {
     assert.ok(CONFIG_FORM_FIELDS.includes('llmProvider'));
     assert.ok(CONFIG_FORM_FIELDS.includes('maxOpenTabs'));
+    assert.ok(CONFIG_FORM_FIELDS.includes('topicCacheSize'));
+    assert.equal(CONFIG_FORM_FIELDS.includes('cacheSize'), false);
+    assert.equal(CONFIG_FORM_FIELDS.includes('stackSize'), false);
     assert.ok(CONFIG_FORM_FIELDS.includes('dailyLlmQuota'));
   });
 
