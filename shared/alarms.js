@@ -4,7 +4,10 @@
  */
 
 export const ALARM_NAMES = Object.freeze({
-  /** Periodic reclaim / overflow maintenance. */
+  /**
+   * Legacy periodic reclaim alarm (pre organize-only reclaim).
+   * No longer created; cleared on SW start so old installs stop waking for reclaim.
+   */
   MAINTAIN: 'tab-caption-maintain',
   /** Wake SW to continue an interrupted Organize refine queue. */
   ORGANIZE_RESUME: 'tab-caption-organize-resume',
@@ -43,7 +46,8 @@ export async function clearOrganizeResumeAlarm(alarms = globalThis.chrome?.alarm
 }
 
 /**
- * Ensure the periodic maintenance alarm exists.
+ * @deprecated maxOpenTabs reclaim is Organize-only — do not create this alarm.
+ * Kept for tests that assert the legacy name / create path.
  * @param {typeof chrome.alarms | undefined} alarms
  */
 export async function ensureMaintainAlarm(alarms = globalThis.chrome?.alarms) {
@@ -51,6 +55,19 @@ export async function ensureMaintainAlarm(alarms = globalThis.chrome?.alarms) {
   try {
     await alarms.create(ALARM_NAMES.MAINTAIN, { periodInMinutes: 1 });
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Clear the legacy maintain/reclaim alarm (idempotent).
+ * @param {typeof chrome.alarms | undefined} alarms
+ */
+export async function clearMaintainAlarm(alarms = globalThis.chrome?.alarms) {
+  if (!alarms?.clear) return false;
+  try {
+    return Boolean(await alarms.clear(ALARM_NAMES.MAINTAIN));
   } catch {
     return false;
   }

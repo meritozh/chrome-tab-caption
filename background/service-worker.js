@@ -46,7 +46,7 @@ import {
 } from '../shared/metrics.js';
 import {
   ALARM_NAMES,
-  ensureMaintainAlarm,
+  clearMaintainAlarm,
   ensureOrganizeResumeAlarm,
   clearOrganizeResumeAlarm,
 } from '../shared/alarms.js';
@@ -607,9 +607,8 @@ async function runDedupePass() {
 }
 
 /**
- * After Organize: skip reclaim when single-window merge already applied the
- * lastAccessed keep-set, or when stack reclassify was interrupted mid-pass.
- * Used by GROUP_TABS and alarm resume.
+ * After Organize / Reorganize: optional follow-up maybeReclaim when merge did
+ * not already apply the keep-set (e.g. per-window scope). Never used for browse.
  * @param {{
  *   ok?: boolean,
  *   merge?: unknown,
@@ -623,7 +622,9 @@ function scheduleReclaimAfterOrganize(result) {
 }
 
 /**
- * Schedule reclaim after tab create/remove (debounce = classifyDebounceMs).
+ * Debounced maxOpenTabs reclaim — **Organize follow-up only**.
+ * Must not be called from tab create/activate/remove/alarm/config
+ * (see shouldRunBrowseTimeReclaim in shared/organize-reclaim.js).
  * Reclaim always runs dedupe first (ADR order).
  */
 function scheduleReclaim() {
@@ -728,7 +729,7 @@ function onMessage(message, sender, sendResponse) {
         }
         await persistStackRecords(stackStore);
         chrome.runtime.sendMessage({ type: MSG.CONFIG_UPDATED }).catch(() => {});
-        scheduleReclaim();
+        // maxOpenTabs reclaim is Organize-only — config save does not reclaim.
         sendResponse({ ok: true, config: redactConfigForUi(next) });
         break;
       }
@@ -988,9 +989,7 @@ function onMessage(message, sender, sendResponse) {
           setOverflowPending,
           count: message.count,
         });
-        if (result.ok) {
-          scheduleReclaim();
-        }
+        // Overflow clear does not auto-reclaim; next Organize enforces maxOpenTabs.
         sendResponse(result);
         break;
       }
@@ -1183,25 +1182,24 @@ try {
 }
 
 chrome.tabs.onCreated.addListener(() => {
-  // Reclaim pass always runs dedupe first (ADR order). Avoid a second overlapping
-  // scheduleDedupe on create — runAutoDedupe is also serialized via dedupeGate.
-  scheduleReclaim();
+  // Dedupe only — maxOpenTabs reclaim is Organize/Reorganize-only.
+  scheduleDedupe();
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   pendingTabSync.delete(tabId);
   closingTabIds.delete(tabId);
   tabActivity.clear(tabId);
-  // After user/extension close, open count may drop below max — clear path for later.
-  scheduleReclaim();
+  // No reclaim on remove — open tab count is unlimited between Organize runs.
 });
 
-// Periodic maintenance + Organize alarm resume (MV3 SW).
+// Organize alarm resume only (legacy maintain/reclaim alarm is cleared).
 try {
-  ensureMaintainAlarm();
+  clearMaintainAlarm().catch(() => {});
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm?.name === ALARM_NAMES.MAINTAIN) {
-      scheduleReclaim();
+      // Legacy installs may still fire once — never reclaim on alarm.
+      clearMaintainAlarm().catch(() => {});
       return;
     }
     if (alarm?.name === ALARM_NAMES.ORGANIZE_RESUME) {
