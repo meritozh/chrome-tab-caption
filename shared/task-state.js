@@ -236,7 +236,7 @@ export function summarizeJobState(checkpoint) {
     resumable: isResumablePhase(checkpoint.phase) && remaining > 0,
     /**
      * True only for alarm/SW-sleep continuation — not a normal in-progress Organize.
-     * Side Panel must adopt UI only when this is set (avoid hijacking Confirm).
+     * Side Panel must adopt UI only when this is set (avoid hijacking an in-flight Organize).
      */
     alarmResume:
       resumeCount > 0 || checkpoint.phase === JOB_PHASES.INTERRUPTED,

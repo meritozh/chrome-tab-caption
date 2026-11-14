@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   formatOrganizeCancelMessage,
+  isIdleOrganizeCancel,
   isPreviewOnlyCancel,
   organizeCancelCheckpoint,
   shouldApplyOrganizeCompletion,
@@ -50,12 +51,18 @@ describe('shouldApplyOrganizeCompletion', () => {
   });
 });
 
-describe('isPreviewOnlyCancel', () => {
-  it('treats preview/idle as preview-only (no job)', () => {
-    assert.equal(isPreviewOnlyCancel('preview'), true);
+describe('isIdleOrganizeCancel', () => {
+  it('treats idle as no local Organize job', () => {
+    assert.equal(isIdleOrganizeCancel('idle'), true);
+    assert.equal(isIdleOrganizeCancel('permissions'), false);
+    assert.equal(isIdleOrganizeCancel('running'), false);
+    assert.equal(isIdleOrganizeCancel('cancelling'), false);
+  });
+
+  it('keeps deprecated isPreviewOnlyCancel alias for idle/preview', () => {
     assert.equal(isPreviewOnlyCancel('idle'), true);
-    assert.equal(isPreviewOnlyCancel('confirming'), false);
-    assert.equal(isPreviewOnlyCancel('running'), false);
+    assert.equal(isPreviewOnlyCancel('preview'), true);
+    assert.equal(isPreviewOnlyCancel('permissions'), false);
   });
 });
 

@@ -15,14 +15,14 @@ Canonical product ADR lives in the Project store (`docs/tab-manager-adr.md`). Th
 9. **Search** — Pinyin + fuzzy; **recency-first**.
 10. **Stack overflow** — Warn first; user chooses export or discard.
 11. **UI** — Side Panel primary + simple Options; no extra onboarding. **Toolbar icon toggles** the Side Panel (open↔close). Organize CTA lives **only** in the Side Panel (Options = settings only).
-12. **Privacy UX** — Always show payload fields + preview before real LLM calls.
+12. **Privacy UX** — Document LLM payload fields in Options / Settings (API key never listed). **Organize applies classify results immediately** — no Confirm / payload-preview gate before or after LLM (revised 2026-11-14; supersedes “always preview + Confirm before real calls”).
 13. **Live LLM only** — No mock / hostname topic fallback. Organize and `TEST_LLM` require a configured, reachable user LLM; cache hits may still apply, but new topics are never invented locally.
 
 ## Engineering (Borrowed / Skipped from smart-tab-pilot)
 
 **Borrow:** Side Panel shell, SW message table, activate-then-remove dedupe, short excerpt + on-demand `executeScript`, quick-pass → refine + timeouts/`GROUP_PROGRESS`, local LRU cache keyed by `urlKey+contentHash`, suppressClosed closes, Open/Stacked search shell. Single-window merge + topic-tagged Stacks are product-owned (not Pilot).
 
-**Skip:** Always-on auto-group, Gemini Nano / completions-only as primary, nav-graph clustering, always-on `<all_urls>` content scripts, API key in `storage.sync`, missing payload preview, locale-mixed topics, `chrome.sessions` as Stacks, hash-preserving dedupe, legacy popup.
+**Skip:** Always-on auto-group, Gemini Nano / completions-only as primary, nav-graph clustering, always-on `<all_urls>` content scripts, API key in `storage.sync`, blocking Organize behind payload Confirm, locale-mixed topics, `chrome.sessions` as Stacks, hash-preserving dedupe, legacy popup.
 
 ## Phase 7 hardening (this release)
 

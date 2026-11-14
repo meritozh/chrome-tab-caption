@@ -471,6 +471,16 @@ select:disabled {
   margin-top: 0.5rem;
 }
 
+.sp-organize-actions {
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.sp-organize-actions .sp-cta-hero {
+  margin-top: 0;
+}
+
 .sp-overflow {
   margin: 0.5rem 0 0.75rem;
   padding: 0.75rem;

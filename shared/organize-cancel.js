@@ -27,9 +27,9 @@ export function formatOrganizeCancelMessage(stats = {}) {
 }
 
 /**
- * Whether an in-flight Confirm / GROUP_TABS completion should update the UI.
+ * Whether an in-flight Organize / GROUP_TABS completion should update the UI.
  * @param {object} opts
- * @param {number} opts.runId — id captured when Confirm started
+ * @param {number} opts.runId — id captured when Organize started
  * @param {number} opts.activeRunId — current side-panel generation
  * @param {boolean} [opts.cancelRequested]
  * @returns {boolean}
@@ -41,12 +41,22 @@ export function shouldApplyOrganizeCompletion(opts) {
 }
 
 /**
- * Whether Cancel was only dismissing the privacy preview (no job started).
- * @param {'idle' | 'preview' | 'confirming' | 'running' | 'cancelling'} phase
+ * Whether Cancel is idle (no local Organize job from this panel).
+ * May still target a known alarm-resume jobId.
+ * @param {'idle' | 'permissions' | 'running' | 'cancelling' | string} phase
+ * @returns {boolean}
+ */
+export function isIdleOrganizeCancel(phase) {
+  return phase === 'idle';
+}
+
+/**
+ * @deprecated Use isIdleOrganizeCancel — privacy preview Confirm was removed.
+ * @param {string} phase
  * @returns {boolean}
  */
 export function isPreviewOnlyCancel(phase) {
-  return phase === 'preview' || phase === 'idle';
+  return isIdleOrganizeCancel(phase) || phase === 'preview';
 }
 
 /**

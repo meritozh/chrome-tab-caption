@@ -21,11 +21,11 @@ No install-time `host_permissions`. No always-on `content_scripts`. Side Panel a
 | **alarms** | Schedule deferred reclaim / maintenance and resume interrupted Organize jobs while the MV3 service worker may sleep. |
 | **sidePanel** | Primary UI: open the Side Panel from the action icon for organize, search, and Stacks. |
 | **scripting** | On user-triggered Organize (and only when content extraction is enabled), inject a short extract script to read a capped page excerpt for classification. Not injected on every page load by default. |
-| **optional_host_permissions** (`http://*/*`, `https://*/*`) | Requested at runtime when the user confirms Organize — LLM endpoint origin and, if extraction is on, page origins. Not granted at install; user can deny. Broad patterns are needed because tab URLs and user endpoints are arbitrary; we do not use always-on `<all_urls>` content scripts. |
+| **optional_host_permissions** (`http://*/*`, `https://*/*`) | Requested at runtime when the user clicks Organize — LLM endpoint origin and, if extraction is on, page origins. Not granted at install; user can deny. Broad patterns are needed because tab URLs and user endpoints are arbitrary; we do not use always-on `<all_urls>` content scripts. |
 
 ## Product constraints (do not weaken)
 
-- Grouping is **on-demand** (user click + privacy preview), not always-on.
+- Grouping is **on-demand** (user click → classify → apply), not always-on.
 - API keys only in `chrome.storage.local` (never `sync`).
 - LLM traffic goes to the **user-configured** endpoint; the extension does not proxy or receive it.
 - English fine topics, URL normalize (hash + tracking only), activate-then-remove dedupe, Stacks reclaim/recall — see Decisions Log.

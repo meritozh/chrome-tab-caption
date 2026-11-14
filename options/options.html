@@ -123,13 +123,14 @@
         <legend>Privacy</legend>
         <label class="opt-check">
           <input id="privacyShowFieldsPreview" name="privacyShowFieldsPreview" type="checkbox" checked disabled />
-          Always show LLM payload fields + preview before real calls
+          Show LLM payload fields in Options (informational)
         </label>
         <p class="opt-help">
-          Locked on by Accepted ADR (#12). Fields UI below mirrors what Side Panel will preview.
+          ADR (#12): fields stay listed here for transparency. Organize applies classify results
+          immediately — no Confirm gate. Side Panel Settings can inspect the active tab’s fields.
         </p>
         <div class="opt-preview-fields" aria-label="Fields sent to LLM">
-          <h2>Fields preview (always visible)</h2>
+          <h2>Fields sent on Organize</h2>
           <ul>
             <li><code>url</code> — normalized page URL</li>
             <li><code>title</code> — document title</li>
@@ -137,7 +138,7 @@
             <li><code>extractedText</code> — short on-demand excerpt (≤~280 chars)</li>
             <li><code>provider</code> / <code>model</code> / <code>endpointBaseUrl</code></li>
           </ul>
-          <p class="opt-help">API key is never included in the preview payload listing.</p>
+          <p class="opt-help">API key is never included in the field listing.</p>
         </div>
       </fieldset>
 

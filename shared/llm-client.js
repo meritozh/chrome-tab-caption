@@ -62,7 +62,7 @@ export function isLlmConfigured(config) {
 }
 
 /**
- * Fields that will be sent for a classify call (privacy preview — ADR #12).
+ * Fields that will be sent for a classify call (Options / Settings field list — ADR #12).
  * @param {ClassifyInput} input
  * @param {Pick<LlmClientConfig, 'provider' | 'model' | 'endpointBaseUrl'>} meta
  */

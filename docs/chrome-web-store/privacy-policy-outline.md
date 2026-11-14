@@ -21,16 +21,16 @@ Manage Chrome tabs: on-demand LLM topic grouping, duplicate tab cleanup, fuzzy s
 - No developer-operated backend; we do **not** receive, proxy, or store user LLM traffic.
 - No remote code execution; model responses are treated as topic **data** only.
 - No always-on content scripts rewriting pages.
-- API keys never go to `chrome.storage.sync` and are never shown in the privacy preview field list.
+- API keys never go to `chrome.storage.sync` and are never shown in the Options / Settings field list.
 
 ## Who data is sent to
 
-Only the LLM endpoint the user configures (Anthropic Messages or OpenAI Responses-style / compatible gateway), after an in-product **privacy preview** and explicit Confirm. Fields mirror the UI: `url`, `title`, `snippet`, `extractedText`, `provider`, `model`, `endpointBaseUrl`.
+Only the LLM endpoint the user configures (Anthropic Messages or OpenAI Responses-style / compatible gateway), when the user clicks **Organize**. Fields mirror the Options list: `url`, `title`, `snippet`, `extractedText`, `provider`, `model`, `endpointBaseUrl`. Classify results apply immediately (no separate Confirm step).
 
 ## User controls
 
 - Organize is on-demand; Cancel cooperatively stops the refine queue.
-- Optional host permissions are requested at Confirm time; deny is respected.
+- Optional host permissions are requested when Organize starts; deny is respected.
 - Content extraction and daily LLM quota are configurable in Options.
 - Stacks overflow requires explicit export or discard.
 
