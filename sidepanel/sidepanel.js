@@ -24,21 +24,69 @@ function tt(key, params = null) {
   return t(uiLocale, key, params);
 }
 
+/**
+ * Live status is NOT driven by data-i18n — store key/params (or raw) and re-render
+ * on locale change so hydrate/locale switch cannot clobber in-flight copy.
+ * @type {{ key: string | null, params: Record<string, string | number> | null, raw: string | null }}
+ */
+let organizeStatusState = { key: 'organize.ready', params: null, raw: null };
+
+function renderOrganizeStatus() {
+  if (!organizeStatus) return;
+  if (organizeStatusState.raw != null) {
+    organizeStatus.textContent = organizeStatusState.raw;
+    return;
+  }
+  if (organizeStatusState.key) {
+    organizeStatus.textContent = tt(
+      organizeStatusState.key,
+      organizeStatusState.params,
+    );
+  }
+}
+
+/**
+ * @param {string | { key?: string, params?: Record<string, string | number> | null, raw?: string | null }} keyOrState
+ * @param {Record<string, string | number> | null} [params]
+ */
+function setOrganizeStatus(keyOrState, params = null) {
+  if (typeof keyOrState === 'string') {
+    organizeStatusState = { key: keyOrState, params, raw: null };
+  } else if (keyOrState && typeof keyOrState === 'object') {
+    if (typeof keyOrState.raw === 'string') {
+      organizeStatusState = { key: null, params: null, raw: keyOrState.raw };
+    } else {
+      organizeStatusState = {
+        key: typeof keyOrState.key === 'string' ? keyOrState.key : null,
+        params: keyOrState.params ?? null,
+        raw: null,
+      };
+    }
+  }
+  renderOrganizeStatus();
+}
+
 function localizeCancelMessage({ llmCallsAttempted = 0, classified = 0 } = {}) {
   const attempted = Math.max(0, Number(llmCallsAttempted) || 0);
   const classifiedN = Math.max(0, Number(classified) || 0);
-  if (attempted <= 0) return tt('organize.cancelNoLlm');
-  return tt('organize.cancelWithLlm', {
-    attempted,
-    callWord: attempted === 1 ? tt('organize.call') : tt('organize.calls'),
-    classifiedNote:
-      classifiedN > 0 ? tt('organize.classifiedNote', { n: classifiedN }) : '',
-  });
+  if (attempted <= 0) {
+    return { key: 'organize.cancelNoLlm', params: null };
+  }
+  return {
+    key: 'organize.cancelWithLlm',
+    params: {
+      attempted,
+      callWord: attempted === 1 ? tt('organize.call') : tt('organize.calls'),
+      classifiedNote:
+        classifiedN > 0 ? tt('organize.classifiedNote', { n: classifiedN }) : '',
+    },
+  };
 }
 
 /**
  * Prefer SW messageKey when present; else map known phases; else raw message.
  * @param {Record<string, unknown>} message
+ * @returns {{ key: string, params: Record<string, string | number> | null } | { raw: string } | null}
  */
 function formatProgressMessage(message) {
   if (typeof message.messageKey === 'string' && message.messageKey) {
@@ -49,28 +97,37 @@ function formatProgressMessage(message) {
             current: Number(message.current || message.refineIndex) || 0,
             total: Number(message.refineTotal || message.total) || 0,
           };
-    return tt(message.messageKey, params);
+    return { key: message.messageKey, params };
   }
   const phase = typeof message.phase === 'string' ? message.phase : '';
-  if (phase === 'clear-cache') return tt('progress.clearedCache');
-  if (phase === 'quick-pass') return tt('progress.quickPass');
+  if (phase === 'clear-cache') return { key: 'progress.clearedCache', params: null };
+  if (phase === 'quick-pass') return { key: 'progress.quickPass', params: null };
   if (phase === 'refine') {
-    return tt('progress.refine', {
-      current: Number(message.refineIndex) || 0,
-      total: Number(message.refineTotal || message.total) || 0,
-    });
+    return {
+      key: 'progress.refine',
+      params: {
+        current: Number(message.refineIndex) || 0,
+        total: Number(message.refineTotal || message.total) || 0,
+      },
+    };
   }
   if (phase === 'stacks') {
-    return tt('progress.stacks', {
-      current: Number(message.current || message.done) || 0,
-      total: Number(message.total) || 0,
-    });
+    return {
+      key: 'progress.stacks',
+      params: {
+        current: Number(message.current || message.done) || 0,
+        total: Number(message.total) || 0,
+      },
+    };
   }
-  if (phase === 'merge') return tt('progress.merge');
-  if (phase === 'done') return tt('progress.done');
-  if (phase === 'cancelled') return tt('progress.cancelled');
-  if (phase === 'error') return tt('progress.error');
-  return typeof message.message === 'string' ? message.message : '';
+  if (phase === 'merge') return { key: 'progress.merge', params: null };
+  if (phase === 'done') return { key: 'progress.done', params: null };
+  if (phase === 'cancelled') return { key: 'progress.cancelled', params: null };
+  if (phase === 'error') return { key: 'progress.error', params: null };
+  if (typeof message.message === 'string' && message.message) {
+    return { raw: message.message };
+  }
+  return null;
 }
 
 function applyLocale(nextLocale, { persist = false } = {}) {
@@ -80,14 +137,8 @@ function applyLocale(nextLocale, { persist = false } = {}) {
     document.getElementById('ui-locale')
   );
   if (select) select.value = uiLocale;
-  if (
-    !organizeBusy &&
-    organizePhase === 'idle' &&
-    organizeStatus &&
-    organizeConfigReady
-  ) {
-    organizeStatus.textContent = tt('organize.ready');
-  }
+  // Re-render stored status (never force Ready over in-flight copy).
+  renderOrganizeStatus();
   if (persist) {
     sendToBackground(MSG.SET_CONFIG, { patch: { uiLocale } }).catch(() => {});
   }
@@ -278,7 +329,9 @@ function adoptAlarmResumeState(state) {
   lastLlmCallsAttempted = Number(state.llmCallsAttempted) || lastLlmCallsAttempted;
   lastClassified = Number(state.classified) || lastClassified;
   setBusy(true);
-  organizeStatus.textContent = `Alarm resume — ${state.remaining} tabs queued…`;
+  setOrganizeStatus({
+    raw: `Alarm resume — ${state.remaining} tabs queued…`,
+  });
   setOrganizeProgressVisible(true);
   return true;
 }
@@ -289,14 +342,16 @@ function adoptAlarmResumeState(state) {
  */
 function endAdoptedAlarmResumeUi() {
   const status = organizeStatus?.textContent || '';
+  const key = organizeStatusState.key;
   if (
     status.startsWith('Alarm resume') ||
     status.startsWith('Resuming Organize') ||
-    status === tt('organize.busy') ||
-    status === tt('organize.reorganizing') ||
-    status === tt('organize.cancelling')
+    key === 'organize.busy' ||
+    key === 'organize.reorganizing' ||
+    key === 'organize.cancelling' ||
+    organizeStatusState.raw
   ) {
-    organizeStatus.textContent = tt('organize.ended');
+    setOrganizeStatus('organize.ended');
   }
   setOrganizeIdle();
   sendToBackground(MSG.GET_LOGICAL_TOPICS)
@@ -441,7 +496,7 @@ async function startOrganizeJob(mode = 'organize') {
     // Non-idle phase so Cancel does not take the idle/alarm path mid-retry.
     organizePhase = 'permissions';
     setBusy(true);
-    organizeStatus.textContent = tt('organize.loadingSettings');
+    setOrganizeStatus('organize.loadingSettings');
     await refreshCachedOrganizeConfig();
     // Matching runId must idle even while busy (this retry set busy).
     // Superseded runId must not setOrganizeIdle (would clobber a newer Organize).
@@ -455,12 +510,12 @@ async function startOrganizeJob(mode = 'organize') {
     }
     setOrganizeIdle();
     if (!organizeConfigReady) {
-      organizeStatus.textContent = tt('organize.settingsRetry');
+      setOrganizeStatus('organize.settingsRetry');
       return;
     }
-    organizeStatus.textContent = isCachedLlmReady()
-      ? tt('organize.settingsLoaded')
-      : tt('organize.llmMissing');
+    setOrganizeStatus(
+      isCachedLlmReady() ? 'organize.settingsLoaded' : 'organize.llmMissing',
+    );
     applyLocale(uiLocale);
     return;
   }
@@ -473,9 +528,7 @@ async function startOrganizeJob(mode = 'organize') {
   activeOrganizeMode = mode;
   organizePhase = 'permissions';
   setBusy(true);
-  organizeStatus.textContent = reorganize
-    ? tt('organize.reorganizing')
-    : tt('organize.busy');
+  setOrganizeStatus(reorganize ? 'organize.reorganizing' : 'organize.busy');
   setOrganizeProgressVisible(true);
 
   const scope = scopeSelect?.value === 'current' ? 'current' : 'all';
@@ -484,7 +537,7 @@ async function startOrganizeJob(mode = 'organize') {
   const provider = cached.llmProvider || '';
   if (!isCachedLlmReady(cached)) {
     setOrganizeIdle();
-    organizeStatus.textContent = tt('organize.llmMissing');
+    setOrganizeStatus('organize.llmMissing');
     return;
   }
 
@@ -502,7 +555,7 @@ async function startOrganizeJob(mode = 'organize') {
 
   if (!allowed) {
     setOrganizeIdle();
-    organizeStatus.textContent = tt('organize.permissionDenied');
+    setOrganizeStatus('organize.permissionDenied');
     return;
   }
 
@@ -516,7 +569,7 @@ async function startOrganizeJob(mode = 'organize') {
   if (cfg?.config) rememberOrganizeConfig(cfg.config);
   if (!isCachedLlmReady()) {
     setOrganizeIdle();
-    organizeStatus.textContent = tt('organize.llmMissing');
+    setOrganizeStatus('organize.llmMissing');
     return;
   }
 
@@ -550,10 +603,12 @@ async function startOrganizeJob(mode = 'organize') {
     if (res?.cancelled) {
       lastLlmCallsAttempted = Number(res.llmCallsAttempted) || lastLlmCallsAttempted;
       lastClassified = Number(res.classified) || lastClassified;
-      organizeStatus.textContent = localizeCancelMessage({
-        llmCallsAttempted: lastLlmCallsAttempted,
-        classified: lastClassified,
-      });
+      setOrganizeStatus(
+        localizeCancelMessage({
+          llmCallsAttempted: lastLlmCallsAttempted,
+          classified: lastClassified,
+        }),
+      );
       if (Array.isArray(res.logical) && res.logical.length) {
         renderLogicalTopics(res.logical);
       }
@@ -564,10 +619,12 @@ async function startOrganizeJob(mode = 'organize') {
   if (res?.cancelled) {
     lastLlmCallsAttempted = Number(res.llmCallsAttempted) || 0;
     lastClassified = Number(res.classified) || 0;
-    organizeStatus.textContent = localizeCancelMessage({
-      llmCallsAttempted: lastLlmCallsAttempted,
-      classified: lastClassified,
-    });
+    setOrganizeStatus(
+      localizeCancelMessage({
+        llmCallsAttempted: lastLlmCallsAttempted,
+        classified: lastClassified,
+      }),
+    );
     if (Array.isArray(res.logical) && res.logical.length) {
       renderLogicalTopics(res.logical);
     }
@@ -577,11 +634,27 @@ async function startOrganizeJob(mode = 'organize') {
 
   if (!res?.ok) {
     setOrganizeIdle();
-    organizeStatus.textContent = res?.needsLlmConfig
-      ? res.error || tt('organize.llmMissing')
-      : res?.needsPermission
-        ? `${res.error || 'Host permission missing.'} ${tt('organize.btn')}`
-        : res?.error || tt('organize.failed');
+    if (res?.needsLlmConfig) {
+      setOrganizeStatus(
+        res.error
+          ? { raw: String(res.error) }
+          : { key: 'organize.llmMissing', params: null },
+      );
+    } else if (res?.needsPermission) {
+      setOrganizeStatus(
+        res.error
+          ? {
+              raw: `${res.error} ${tt('organize.permissionRetry')}`,
+            }
+          : { key: 'organize.permissionRetry', params: null },
+      );
+    } else {
+      setOrganizeStatus(
+        res?.error
+          ? { raw: String(res.error) }
+          : { key: 'organize.failed', params: null },
+      );
+    }
     return;
   }
 
@@ -593,7 +666,7 @@ async function startOrganizeJob(mode = 'organize') {
     res.merge?.targetWindowId != null ? tt('organize.merged') : '';
   const stacked =
     reclaimed > 0 ? tt('organize.stacked', { n: reclaimed }) : '';
-  organizeStatus.textContent = tt('organize.done', {
+  setOrganizeStatus('organize.done', {
     topics,
     applied,
     merged,
@@ -625,7 +698,7 @@ cancelBtn?.addEventListener('click', async () => {
     setOrganizeIdle();
     lastLlmCallsAttempted = 0;
     lastClassified = 0;
-    organizeStatus.textContent = localizeCancelMessage({ llmCallsAttempted: 0 });
+    setOrganizeStatus(localizeCancelMessage({ llmCallsAttempted: 0 }));
     return;
   }
 
@@ -634,14 +707,14 @@ cancelBtn?.addEventListener('click', async () => {
     setOrganizeIdle();
     lastLlmCallsAttempted = 0;
     lastClassified = 0;
-    organizeStatus.textContent = localizeCancelMessage({ llmCallsAttempted: 0 });
+    setOrganizeStatus(localizeCancelMessage({ llmCallsAttempted: 0 }));
     sendToBackground(MSG.CANCEL_GROUP, { clientRunId: cancelledRunId }).catch(() => {});
     return;
   }
 
   if (phase === 'running' || phase === 'cancelling') {
     organizePhase = 'cancelling';
-    organizeStatus.textContent = tt('organize.cancelling');
+    setOrganizeStatus('organize.cancelling');
     const jobIdToCancel = activeJobId || knownAlarmJobId;
     const cancelRes = await sendToBackground(MSG.CANCEL_GROUP, {
       clientRunId: cancelledRunId,
@@ -655,16 +728,18 @@ cancelBtn?.addEventListener('click', async () => {
     }
     // Organize click handler will refine copy from the cancelled job result when it returns;
     // show best-known progress counts immediately (never invent "no LLM" if we saw calls).
-    organizeStatus.textContent = localizeCancelMessage({
-      llmCallsAttempted: lastLlmCallsAttempted,
-      classified: lastClassified,
-    });
+    setOrganizeStatus(
+      localizeCancelMessage({
+        llmCallsAttempted: lastLlmCallsAttempted,
+        classified: lastClassified,
+      }),
+    );
     setOrganizeIdle();
     return;
   }
 
   setOrganizeIdle();
-  organizeStatus.textContent = localizeCancelMessage({ llmCallsAttempted: 0 });
+  setOrganizeStatus(localizeCancelMessage({ llmCallsAttempted: 0 }));
 });
 
 onBackgroundBroadcast((message) => {
@@ -716,18 +791,18 @@ onBackgroundBroadcast((message) => {
     lastClassified = message.classified;
   }
   if (message.phase === 'cancelled') {
-    organizeStatus.textContent = localizeCancelMessage({
-      llmCallsAttempted: lastLlmCallsAttempted,
-      classified: lastClassified,
-    });
+    setOrganizeStatus(
+      localizeCancelMessage({
+        llmCallsAttempted: lastLlmCallsAttempted,
+        classified: lastClassified,
+      }),
+    );
     return;
   }
   // Suppress stale "Done" if user already cancelled.
   if (organizePhase === 'cancelling') return;
-  const progressText = formatProgressMessage(message);
-  if (progressText) {
-    organizeStatus.textContent = progressText;
-  }
+  const progressState = formatProgressMessage(message);
+  if (progressState) setOrganizeStatus(progressState);
   if (message.phase && message.phase !== 'done' && message.phase !== 'cancelled') {
     setOrganizeProgressVisible(true);
   }
@@ -1222,7 +1297,7 @@ function escapeHtml(s) {
 syncOrganizeEnabled();
 applyLocale(uiLocale);
 if (organizeStatus && !organizeConfigReady) {
-  organizeStatus.textContent = tt('organize.loadingSettings');
+  setOrganizeStatus('organize.loadingSettings');
 }
 
 localeSelect?.addEventListener('change', () => {
@@ -1250,9 +1325,9 @@ void refreshCachedOrganizeConfig().then(() => {
   applyLocale(uiLocale);
   if (!organizeBusy && organizePhase === 'idle' && organizeStatus) {
     if (!organizeConfigReady) {
-      organizeStatus.textContent = tt('organize.settingsRetry');
+      setOrganizeStatus('organize.settingsRetry');
     } else {
-      organizeStatus.textContent = tt('organize.ready');
+      setOrganizeStatus('organize.ready');
     }
   }
 });

@@ -5,6 +5,11 @@ import {
   OpenAiResponsesLlmClient,
   buildClassifyPayloadPreview,
   buildClassifyUserPrompt,
+  buildClassifySystemPrompt,
+  normalizeExistingTopics,
+  shouldPreferExistingTopics,
+  CLASSIFY_SYSTEM_PROMPT,
+  CLASSIFY_PREFER_EXISTING_SYSTEM_SUFFIX,
   createLlmClient,
   isLlmConfigured,
   LLM_CONFIG_REQUIRED_MESSAGE,
@@ -139,6 +144,53 @@ describe('llm-client', () => {
     });
     assert.match(prompt, /https:\/\/x\.test/);
     assert.ok(prompt.length < 800);
+  });
+
+  it('prefer-existing prompts list topics; Reorganize omits them', () => {
+    assert.deepEqual(normalizeExistingTopics([' Docs ', 'docs', 'News']), [
+      'Docs',
+      'News',
+    ]);
+    assert.equal(
+      shouldPreferExistingTopics({
+        preferExisting: true,
+        existingTopics: ['Docs'],
+      }),
+      true,
+    );
+    assert.equal(
+      shouldPreferExistingTopics({
+        preferExisting: false,
+        existingTopics: ['Docs'],
+      }),
+      false,
+    );
+
+    const withPrefer = buildClassifyUserPrompt({
+      url: 'https://a.test',
+      title: 'A',
+      preferExisting: true,
+      existingTopics: ['Docs', 'News'],
+    });
+    assert.match(withPrefer, /Existing topics/);
+    assert.match(withPrefer, /- Docs/);
+    assert.match(withPrefer, /Only create a new topic/);
+
+    const reorganize = buildClassifyUserPrompt({
+      url: 'https://a.test',
+      title: 'A',
+      preferExisting: false,
+      existingTopics: ['Docs', 'News'],
+    });
+    assert.doesNotMatch(reorganize, /Existing topics/);
+
+    assert.equal(buildClassifySystemPrompt({ preferExisting: false }), CLASSIFY_SYSTEM_PROMPT);
+    assert.ok(
+      buildClassifySystemPrompt({
+        preferExisting: true,
+        existingTopics: ['Docs'],
+      }).includes(CLASSIFY_PREFER_EXISTING_SYSTEM_SUFFIX),
+    );
   });
 
   it('joinEndpoint avoids double slashes', () => {

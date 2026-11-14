@@ -26,6 +26,25 @@ describe('organize task state machine', () => {
     assert.equal(cp.phase, JOB_PHASES.QUEUED);
     assert.equal(cp.refineQueue.length, 1);
     assert.equal(cp.confirmed, true);
+    assert.equal(cp.reorganize, false);
+    assert.equal(cp.reclassifyStacks, false);
+    assert.equal(cp.stacksDone, false);
+  });
+
+  it('persists Reorganize flags for alarm resume', () => {
+    const cp = createOrganizeCheckpoint({
+      jobId: 'reorg-1',
+      reorganize: true,
+      stacksDone: false,
+    });
+    assert.equal(cp.reorganize, true);
+    assert.equal(cp.clearCache, true);
+    assert.equal(cp.bypassCache, true);
+    assert.equal(cp.reclassifyStacks, true);
+    const advanced = advancePhase(cp, JOB_PHASES.REFINE, { stacksDone: true });
+    assert.equal(advanced.reorganize, true);
+    assert.equal(advanced.reclassifyStacks, true);
+    assert.equal(advanced.stacksDone, true);
   });
 
   it('classifies resumable vs terminal phases', () => {

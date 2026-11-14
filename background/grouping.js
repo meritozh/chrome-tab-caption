@@ -26,6 +26,7 @@ import {
   createLlmClient,
   isLlmConfigured,
   LLM_CONFIG_REQUIRED_MESSAGE,
+  normalizeExistingTopics,
 } from '../shared/llm-client.js';
 import { hasEndpointPermission } from '../shared/permissions.js';
 import { capExcerpt, persistTopicCache } from '../shared/topic-cache.js';
@@ -48,6 +49,54 @@ import { persistStackRecords } from '../shared/stack-records.js';
  * @typedef {import('../shared/topic-cache.js').TopicCacheLru} TopicCacheLru
  * @typedef {import('../shared/physical-groups.js').TabTopicAssignment} TabTopicAssignment
  */
+
+/**
+ * Distinct topic labels currently used by Chrome tab groups in scope.
+ * @param {'all' | 'current'} scope
+ * @param {number} [currentWindowId]
+ * @returns {Promise<string[]>}
+ */
+export async function listPhysicalGroupTopicLabels(scope, currentWindowId) {
+  try {
+    const tabs = await queryTabsForScope(scope, currentWindowId);
+    /** @type {Set<number>} */
+    const groupIds = new Set();
+    for (const tab of tabs) {
+      const gid = tab?.groupId;
+      if (typeof gid === 'number' && gid !== TAB_GROUP_ID_NONE && gid >= 0) {
+        groupIds.add(gid);
+      }
+    }
+    /** @type {string[]} */
+    const titles = [];
+    for (const groupId of groupIds) {
+      try {
+        const group = await chrome.tabGroups.get(groupId);
+        if (group?.title) titles.push(String(group.title));
+      } catch {
+        // group may have closed
+      }
+    }
+    return normalizeExistingTopics(titles);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Labels already assigned this run (registry) + seed physical groups.
+ * @param {Map<string, { label?: string }>} topicRegistry
+ * @param {string[]} [seedLabels]
+ */
+export function existingTopicsForClassify(topicRegistry, seedLabels = []) {
+  const fromRegistry = [];
+  if (topicRegistry && typeof topicRegistry.values === 'function') {
+    for (const rec of topicRegistry.values()) {
+      if (rec?.label) fromRegistry.push(rec.label);
+    }
+  }
+  return normalizeExistingTopics([...(seedLabels || []), ...fromRegistry]);
+}
 
 /**
  * Broadcast progress to Side Panel (fail-soft if no listeners).
@@ -288,11 +337,32 @@ export async function groupTabsOnDemand(opts) {
   const config = opts.config;
   const topicCache = opts.topicCache;
   const signal = opts.signal;
-  const reorganize = opts.reorganize === true;
-  const clearCache = opts.clearCache === true || reorganize;
-  const bypassCache = opts.bypassCache === true || reorganize;
+  // Prefer explicit opts; on alarm resume fall back to checkpoint flags.
+  const reorganize =
+    opts.reorganize === true || resumeCp?.reorganize === true;
+  const clearCache =
+    !resuming && (opts.clearCache === true || reorganize || resumeCp?.clearCache === true);
+  const bypassCache =
+    opts.bypassCache === true ||
+    reorganize ||
+    resumeCp?.bypassCache === true;
   const reclassifyStacks =
-    opts.reclassifyStacks === true || reorganize;
+    opts.reclassifyStacks === true ||
+    reorganize ||
+    resumeCp?.reclassifyStacks === true;
+  let stacksDone = resumeCp?.stacksDone === true;
+  /** Organize prefers existing topics; Reorganize must not. */
+  const preferExistingTopics = !reorganize;
+  /** @type {string[]} */
+  let seedExistingTopics = [];
+  if (preferExistingTopics) {
+    seedExistingTopics = await listPhysicalGroupTopicLabels(
+      scope,
+      typeof opts.currentWindowId === 'number'
+        ? opts.currentWindowId
+        : resumeCp?.currentWindowId ?? undefined,
+    );
+  }
   const onCheckpoint = opts.onCheckpoint;
   const onLlmSpend = opts.onLlmSpend;
   const metrics = opts.metrics;
@@ -355,6 +425,11 @@ export async function groupTabsOnDemand(opts) {
     classifyErrors,
     llmCallsAttempted,
     resumeCount,
+    reorganize,
+    clearCache: clearCache || resumeCp?.clearCache === true || reorganize,
+    bypassCache,
+    reclassifyStacks,
+    stacksDone,
     phase: resuming ? JOB_PHASES.REFINE : JOB_PHASES.QUEUED,
   });
 
@@ -832,6 +907,10 @@ export async function groupTabsOnDemand(opts) {
             title: tab.title || '',
             snippet: excerpt,
             extractedText: excerpt,
+            preferExisting: preferExistingTopics,
+            existingTopics: preferExistingTopics
+              ? existingTopicsForClassify(topicRegistry, seedExistingTopics)
+              : [],
           }),
           Math.min(TIMEOUTS.CLASSIFY_MS, Math.max(500, deadline.remaining())),
           'classify',
@@ -915,8 +994,9 @@ export async function groupTabsOnDemand(opts) {
   }
 
   // Reorganize: refresh topics on every Stack record (title/url classify; no live tab extract).
+  // Also runs after alarm resume when checkpoint kept reclassifyStacks / reorganize.
   let stacksReclassified = 0;
-  if (reclassifyStacks && opts.stackStore && !resuming) {
+  if (reclassifyStacks && opts.stackStore && !stacksDone) {
     const stackResult = await reclassifyAllStacks({
       stackStore: opts.stackStore,
       topicCache,
@@ -952,6 +1032,11 @@ export async function groupTabsOnDemand(opts) {
     }
     stacksReclassified = stackResult.reclassified || 0;
     client = stackResult.client ?? client;
+    stacksDone = true;
+    await emitCheckpoint(
+      onCheckpoint,
+      snapshotCheckpoint(JOB_PHASES.REFINE, { total, stacksDone: true }),
+    );
   }
 
   await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.APPLYING, { total }));
@@ -1194,6 +1279,9 @@ async function reclassifyAllStacks(opts) {
           title: stack.title || '',
           snippet: '',
           extractedText: '',
+          // Stack reclassify is part of Reorganize — never prefer existing topics.
+          preferExisting: false,
+          existingTopics: [],
         }),
         Math.min(TIMEOUTS.CLASSIFY_MS, Math.max(500, deadline.remaining())),
         'classify-stack',

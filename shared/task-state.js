@@ -71,6 +71,11 @@ const TERMINAL = new Set([
  *   classified: number,
  *   classifyErrors: number,
  *   resumeCount: number,
+ *   reorganize: boolean,
+ *   clearCache: boolean,
+ *   bypassCache: boolean,
+ *   reclassifyStacks: boolean,
+ *   stacksDone: boolean,
  * }} OrganizeCheckpoint
  */
 
@@ -80,6 +85,7 @@ const TERMINAL = new Set([
  */
 export function createOrganizeCheckpoint(partial) {
   const now = Date.now();
+  const reorganize = partial.reorganize === true;
   return {
     jobId: String(partial.jobId),
     phase: partial.phase || JOB_PHASES.QUEUED,
@@ -99,6 +105,11 @@ export function createOrganizeCheckpoint(partial) {
     classified: Math.max(0, Number(partial.classified) || 0),
     classifyErrors: Math.max(0, Number(partial.classifyErrors) || 0),
     resumeCount: Math.max(0, Number(partial.resumeCount) || 0),
+    reorganize,
+    clearCache: partial.clearCache === true || reorganize,
+    bypassCache: partial.bypassCache === true || reorganize,
+    reclassifyStacks: partial.reclassifyStacks === true || reorganize,
+    stacksDone: partial.stacksDone === true,
   };
 }
 

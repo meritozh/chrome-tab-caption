@@ -37,6 +37,8 @@ export const MESSAGES = {
       'LLM not configured — open Options and set provider + API key before Organize.',
     'organize.permissionDenied':
       'Host permission denied. Grant LLM + page access, then Organize again.',
+    'organize.permissionRetry':
+      'Host permission missing. Organize again after granting access.',
     'organize.busy': 'Organizing…',
     'organize.reorganizing': 'Reorganizing…',
     'organize.cancelling': 'Cancelling…',
@@ -142,6 +144,7 @@ export const MESSAGES = {
     'organize.settingsLoaded': '设置已加载 — 请再次点击整理。',
     'organize.llmMissing': '未配置 LLM — 请先在选项中设置提供商和 API 密钥。',
     'organize.permissionDenied': '未授予主机权限。请允许 LLM 与页面访问后再次整理。',
+    'organize.permissionRetry': '缺少主机权限。授予访问后请再次整理。',
     'organize.busy': '正在整理…',
     'organize.reorganizing': '正在重新整理…',
     'organize.cancelling': '正在取消…',

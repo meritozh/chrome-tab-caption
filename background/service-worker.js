@@ -433,6 +433,11 @@ async function maybeResumeOrganizeFromCheckpoint() {
       jobId,
       clientRunId: cp.clientRunId,
       resumeFrom: cp,
+      // Restore Reorganize semantics after SW sleep (checkpoint-backed).
+      reorganize: cp.reorganize === true,
+      clearCache: false,
+      bypassCache: cp.bypassCache === true || cp.reorganize === true,
+      reclassifyStacks: cp.reclassifyStacks === true || cp.reorganize === true,
     });
     if (result?.ok) {
       await rememberOrganizeState(result);
