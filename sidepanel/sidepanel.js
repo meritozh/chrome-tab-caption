@@ -4,7 +4,7 @@
  * No LLM side-effects here; messages go to the service worker.
  */
 
-import { MSG } from '../shared/constants.js';
+import { MSG, STORAGE_KEYS } from '../shared/constants.js';
 import { sendToBackground, onBackgroundBroadcast } from '../shared/messages.js';
 import { requestOrganizePermissions } from '../shared/permissions.js';
 import {
@@ -99,9 +99,21 @@ const suppressedJobIds = new Set();
 let lastLlmCallsAttempted = 0;
 let lastClassified = 0;
 
+/** True after a successful storage/SW config hydrate (may still be unconfigured LLM). */
+let organizeConfigReady = false;
+/** True when the last hydrate failed — Organize stays clickable to retry. */
+let organizeConfigLoadFailed = false;
+
+function syncOrganizeEnabled() {
+  if (!organizeBtn) return;
+  // Disable until hydrated; if hydrate failed, keep clickable for recoverable retry.
+  organizeBtn.disabled =
+    organizeBusy || (!organizeConfigReady && !organizeConfigLoadFailed);
+}
+
 function setBusy(busy) {
   organizeBusy = busy;
-  if (organizeBtn) organizeBtn.disabled = busy;
+  syncOrganizeEnabled();
   // Cancel stays enabled so the user can abort permission / running jobs.
   if (cancelBtn) cancelBtn.disabled = false;
   if (scopeSelect) scopeSelect.disabled = busy;
@@ -219,6 +231,7 @@ async function getPanelWindowId() {
 /**
  * Cached Options config for Organize click — sync read so permissions.request
  * can be the first await (Chrome user-gesture requirement; matches Options Test LLM).
+ * Organize stays disabled until hydrate finishes (avoids false "LLM not configured").
  * @type {{
  *   llmProvider: string,
  *   endpointBaseUrl: string,
@@ -250,17 +263,90 @@ function rememberOrganizeConfig(config) {
   };
 }
 
-function refreshCachedOrganizeConfig() {
-  return sendToBackground(MSG.GET_CONFIG)
-    .then((res) => {
-      rememberOrganizeConfig(res?.config);
-      return cachedOrganizeConfig;
-    })
-    .catch(() => cachedOrganizeConfig);
+/**
+ * @param {{ hasApiKey?: boolean, llmProvider?: string } | null | undefined} [cfg]
+ */
+function isCachedLlmReady(cfg = cachedOrganizeConfig) {
+  const provider = cfg?.llmProvider || '';
+  return (
+    Boolean(cfg?.hasApiKey) &&
+    (provider === 'anthropic' || provider === 'openai-responses')
+  );
 }
+
+/**
+ * Hydrate from chrome.storage.local (no SW round-trip). Marks ready / load-failed.
+ * @returns {Promise<boolean>}
+ */
+async function hydrateOrganizeConfigFromStorage() {
+  try {
+    const storage = globalThis.chrome?.storage?.local;
+    if (!storage?.get) {
+      organizeConfigReady = false;
+      organizeConfigLoadFailed = true;
+      syncOrganizeEnabled();
+      return false;
+    }
+    const result = await storage.get(STORAGE_KEYS.CONFIG);
+    rememberOrganizeConfig(result?.[STORAGE_KEYS.CONFIG] || {});
+    organizeConfigReady = true;
+    organizeConfigLoadFailed = false;
+    syncOrganizeEnabled();
+    return true;
+  } catch {
+    organizeConfigReady = false;
+    organizeConfigLoadFailed = true;
+    syncOrganizeEnabled();
+    return false;
+  }
+}
+
+/**
+ * Prefer local storage; fall back to SW GET_CONFIG if storage hydrate fails.
+ * @returns {Promise<typeof cachedOrganizeConfig>}
+ */
+function refreshCachedOrganizeConfig() {
+  return hydrateOrganizeConfigFromStorage().then(async (ok) => {
+    if (ok) return cachedOrganizeConfig;
+    try {
+      const res = await sendToBackground(MSG.GET_CONFIG);
+      rememberOrganizeConfig(res?.config);
+      organizeConfigReady = true;
+      organizeConfigLoadFailed = false;
+      syncOrganizeEnabled();
+    } catch {
+      organizeConfigReady = false;
+      organizeConfigLoadFailed = true;
+      syncOrganizeEnabled();
+    }
+    return cachedOrganizeConfig;
+  });
+}
+
+const ORGANIZE_READY_STATUS =
+  'Ready — Organize applies LLM topics immediately (Cancel stops an in-flight job).';
 
 organizeBtn?.addEventListener('click', async () => {
   if (organizeBusy) return;
+
+  // Recoverable path when boot hydrate failed: refetch, then ask for a second click
+  // so permissions.request can still be the first await of a fresh user gesture.
+  if (!organizeConfigReady) {
+    setBusy(true);
+    organizeStatus.textContent = 'Loading settings…';
+    await refreshCachedOrganizeConfig();
+    setOrganizeIdle();
+    if (!organizeConfigReady) {
+      organizeStatus.textContent =
+        'Could not load settings. Click Organize to retry.';
+      return;
+    }
+    organizeStatus.textContent = isCachedLlmReady()
+      ? 'Settings loaded — click Organize again.'
+      : 'LLM not configured — open Options and set provider + API key before Organize.';
+    return;
+  }
+
   const runId = (organizeRunId = nextOrganizeRunId());
   lastLlmCallsAttempted = 0;
   lastClassified = 0;
@@ -275,10 +361,7 @@ organizeBtn?.addEventListener('click', async () => {
   // Sync cache read only — FIRST await must be permissions.request (user gesture).
   const cached = cachedOrganizeConfig;
   const provider = cached.llmProvider || '';
-  const llmReady =
-    cached.hasApiKey &&
-    (provider === 'anthropic' || provider === 'openai-responses');
-  if (!llmReady) {
+  if (!isCachedLlmReady(cached)) {
     setOrganizeIdle();
     organizeStatus.textContent =
       'LLM not configured — open Options and set provider + API key before Organize.';
@@ -307,15 +390,12 @@ organizeBtn?.addEventListener('click', async () => {
   const windowId = await getPanelWindowId();
   if (runId !== organizeRunId) return;
 
-  // Refresh config after gesture-safe permission; SW still hard-fails if cleared.
+  // Optional refresh after grant. Failed GET_CONFIG keeps the cache that already
+  // passed llmReady — SW loads config itself for GROUP_TABS.
   const cfg = await sendToBackground(MSG.GET_CONFIG).catch(() => null);
   if (runId !== organizeRunId) return;
-  rememberOrganizeConfig(cfg?.config);
-  const liveProvider = cfg?.config?.llmProvider || provider;
-  const liveReady =
-    Boolean(cfg?.config?.hasApiKey) &&
-    (liveProvider === 'anthropic' || liveProvider === 'openai-responses');
-  if (!liveReady) {
+  if (cfg?.config) rememberOrganizeConfig(cfg.config);
+  if (!isCachedLlmReady()) {
     setOrganizeIdle();
     organizeStatus.textContent =
       'LLM not configured — open Options and set provider + API key before Organize.';
@@ -466,7 +546,7 @@ onBackgroundBroadcast((message) => {
   if (message.type === MSG.CONFIG_UPDATED) {
     // Always refresh Stacks so a cleared overflow gate hides Export/Discard.
     refreshStacks();
-    refreshCachedOrganizeConfig();
+    void refreshCachedOrganizeConfig();
     return;
   }
   if (message.type === MSG.JOB_STATE) {
@@ -884,9 +964,35 @@ function escapeHtml(s) {
     .replaceAll('"', '&quot;');
 }
 
+// Keep Organize disabled until config hydrate completes (or fails recoverably).
+syncOrganizeEnabled();
+if (organizeStatus && !organizeConfigReady) {
+  organizeStatus.textContent = 'Loading settings…';
+}
+
+chrome.storage?.onChanged?.addListener((changes, area) => {
+  if (area !== 'local' || !changes?.[STORAGE_KEYS.CONFIG]) return;
+  rememberOrganizeConfig(changes[STORAGE_KEYS.CONFIG].newValue || {});
+  organizeConfigReady = true;
+  organizeConfigLoadFailed = false;
+  syncOrganizeEnabled();
+});
+
 refreshStacks();
 refreshLogicalTopics();
-refreshCachedOrganizeConfig();
+void refreshCachedOrganizeConfig().then(() => {
+  if (!organizeBusy && organizePhase === 'idle' && organizeStatus) {
+    if (!organizeConfigReady) {
+      organizeStatus.textContent =
+        'Could not load settings. Click Organize to retry.';
+    } else if (
+      organizeStatus.textContent === 'Loading settings…' ||
+      !organizeStatus.textContent
+    ) {
+      organizeStatus.textContent = ORGANIZE_READY_STATUS;
+    }
+  }
+});
 // Reopened panel: adopt in-flight alarm resume if SW already has a checkpoint.
 sendToBackground(MSG.GET_JOB_STATE)
   .then((state) => {
