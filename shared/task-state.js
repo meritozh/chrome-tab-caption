@@ -76,6 +76,7 @@ const TERMINAL = new Set([
  *   bypassCache: boolean,
  *   reclassifyStacks: boolean,
  *   stacksDone: boolean,
+ *   stackIndex: number,
  * }} OrganizeCheckpoint
  */
 
@@ -110,6 +111,8 @@ export function createOrganizeCheckpoint(partial) {
     bypassCache: partial.bypassCache === true || reorganize,
     reclassifyStacks: partial.reclassifyStacks === true || reorganize,
     stacksDone: partial.stacksDone === true,
+    /** Next stack index to process (resume cursor for reclassifyAllStacks). */
+    stackIndex: Math.max(0, Number(partial.stackIndex) || 0),
   };
 }
 
@@ -257,6 +260,7 @@ export function summarizeJobState(checkpoint) {
     resumable:
       isResumablePhase(checkpoint.phase) && (remaining > 0 || stacksPending),
     stacksPending,
+    stackIndex: Math.max(0, Number(checkpoint.stackIndex) || 0),
     /**
      * True only for alarm/SW-sleep continuation — not a normal in-progress Organize.
      * Side Panel must adopt UI only when this is set (avoid hijacking an in-flight Organize).

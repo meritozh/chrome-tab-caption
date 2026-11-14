@@ -351,6 +351,7 @@ export async function groupTabsOnDemand(opts) {
     reorganize ||
     resumeCp?.reclassifyStacks === true;
   let stacksDone = resumeCp?.stacksDone === true;
+  let stackIndex = Math.max(0, Number(resumeCp?.stackIndex) || 0);
   /** Organize prefers existing topics; Reorganize must not. */
   const preferExistingTopics = !reorganize;
   /** @type {string[]} */
@@ -430,6 +431,7 @@ export async function groupTabsOnDemand(opts) {
     bypassCache,
     reclassifyStacks,
     stacksDone,
+    stackIndex,
     phase: resuming ? JOB_PHASES.REFINE : JOB_PHASES.QUEUED,
   });
 
@@ -995,9 +997,8 @@ export async function groupTabsOnDemand(opts) {
 
   // Reorganize: refresh topics on every Stack record (title/url classify; no live tab extract).
   // Also runs after alarm resume when checkpoint kept reclassifyStacks / reorganize.
+  // Do NOT merge/apply/reclaim until stacksDone — a deadline cut must leave the keep-set alone.
   let stacksReclassified = 0;
-  /** Deadline cut stack pass short — apply tabs, then leave checkpoint resumable. */
-  let stacksIncomplete = false;
   if (reclassifyStacks && opts.stackStore && !stacksDone) {
     const stackResult = await reclassifyAllStacks({
       stackStore: opts.stackStore,
@@ -1011,6 +1012,7 @@ export async function groupTabsOnDemand(opts) {
       dailyQuota,
       onLlmSpend,
       jobId,
+      startIndex: stackIndex,
       checkCancel,
       getStats: () => ({ llmCallsAttempted, classified, classifyErrors }),
       bumpStats: (patch) => {
@@ -1022,10 +1024,28 @@ export async function groupTabsOnDemand(opts) {
           classifyErrors = patch.classifyErrors;
         }
       },
+      onStackProgress: async (nextIndex) => {
+        stackIndex = nextIndex;
+        await emitCheckpoint(
+          onCheckpoint,
+          snapshotCheckpoint(JOB_PHASES.REFINE, {
+            total,
+            stacksDone: false,
+            stackIndex: nextIndex,
+          }),
+        );
+      },
     });
     if (stackResult.cancelled) {
       await persistTopicCache(topicCache);
-      await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.CANCELLED, { total }));
+      await emitCheckpoint(
+        onCheckpoint,
+        snapshotCheckpoint(JOB_PHASES.CANCELLED, {
+          total,
+          stacksDone: false,
+          stackIndex: stackResult.nextIndex ?? stackIndex,
+        }),
+      );
       return stackResult.cancelled;
     }
     if (stackResult.needsLlmConfig) {
@@ -1034,20 +1054,29 @@ export async function groupTabsOnDemand(opts) {
     }
     stacksReclassified = stackResult.reclassified || 0;
     client = stackResult.client ?? client;
+    stackIndex = stackResult.nextIndex ?? stackIndex;
     // Only mark stacksDone when the loop finished every record — never after a
-    // deadline-partial pass (alarm resume must continue remaining stacks).
+    // deadline-partial pass (alarm resume must continue from stackIndex).
     if (stackResult.complete) {
       stacksDone = true;
       await emitCheckpoint(
         onCheckpoint,
-        snapshotCheckpoint(JOB_PHASES.REFINE, { total, stacksDone: true }),
+        snapshotCheckpoint(JOB_PHASES.REFINE, {
+          total,
+          stacksDone: true,
+          stackIndex,
+        }),
       );
     } else {
-      stacksIncomplete = true;
       stacksDone = false;
+      await persistTopicCache(topicCache);
       await emitCheckpoint(
         onCheckpoint,
-        snapshotCheckpoint(JOB_PHASES.REFINE, { total, stacksDone: false }),
+        snapshotCheckpoint(JOB_PHASES.INTERRUPTED, {
+          total,
+          stacksDone: false,
+          stackIndex,
+        }),
       );
       broadcastProgress({
         jobId,
@@ -1058,6 +1087,29 @@ export async function groupTabsOnDemand(opts) {
         llmCallsAttempted,
         classified,
       });
+      // No merge / apply / reclaim — keep-set must not be touched until stacks finish.
+      return {
+        ok: false,
+        timeout: true,
+        stacksPending: true,
+        stub: false,
+        jobId,
+        scope,
+        logical: buildLogicalTopicViews(assignments),
+        assignments: assignments.slice(),
+        physical,
+        merge: null,
+        classified,
+        classifyErrors,
+        llmCallsAttempted,
+        resumeCount,
+        stacksReclassified,
+        stackIndex,
+        reorganize: reorganize || undefined,
+        cacheSize: topicCache.size,
+        latestWinsAt: Date.now(),
+        latestWinsSource: reorganize ? 'extension-reorganize' : 'extension-organize',
+      };
     }
   }
 
@@ -1124,49 +1176,6 @@ export async function groupTabsOnDemand(opts) {
 
   await persistTopicCache(topicCache);
 
-  // Partial stack reclassify: keep a resumable checkpoint (do not clear via ok:true).
-  if (stacksIncomplete) {
-    await emitCheckpoint(
-      onCheckpoint,
-      snapshotCheckpoint(JOB_PHASES.INTERRUPTED, { total, stacksDone: false }),
-    );
-    broadcastProgress({
-      jobId,
-      phase: 'timeout',
-      done: assignments.length,
-      total,
-      applied: physical.applied,
-      classified,
-      classifyErrors,
-      llmCallsAttempted,
-      resumeCount,
-      reclaimed: merge?.reclaimed ?? 0,
-      targetWindowId: merge?.targetWindowId ?? null,
-      message: 'Organize budget exhausted — stack reclassify will resume.',
-    });
-    return {
-      ok: false,
-      timeout: true,
-      stacksPending: true,
-      stub: false,
-      jobId,
-      scope,
-      logical,
-      assignments: finalAssignments,
-      physical,
-      merge,
-      classified,
-      classifyErrors,
-      llmCallsAttempted,
-      resumeCount,
-      stacksReclassified,
-      reorganize: reorganize || undefined,
-      cacheSize: topicCache.size,
-      latestWinsAt: Date.now(),
-      latestWinsSource: reorganize ? 'extension-reorganize' : 'extension-organize',
-    };
-  }
-
   await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.DONE, { total }));
 
   broadcastProgress({
@@ -1217,8 +1226,14 @@ export async function groupTabsOnDemand(opts) {
  */
 async function reclassifyAllStacks(opts) {
   const stacks = opts.stackStore?.list?.() ?? [];
-  if (!stacks.length) {
-    return { reclassified: 0, client: opts.client, complete: true };
+  const startIndex = Math.max(0, Math.min(Number(opts.startIndex) || 0, stacks.length));
+  if (!stacks.length || startIndex >= stacks.length) {
+    return {
+      reclassified: 0,
+      client: opts.client,
+      complete: true,
+      nextIndex: stacks.length,
+    };
   }
 
   let client = opts.client;
@@ -1233,6 +1248,7 @@ async function reclassifyAllStacks(opts) {
   const checkCancel = opts.checkCancel;
   const getStats = opts.getStats;
   const bumpStats = opts.bumpStats;
+  const onStackProgress = opts.onStackProgress;
 
   if (!isLlmConfigured(config)) {
     return {
@@ -1288,15 +1304,23 @@ async function reclassifyAllStacks(opts) {
   let reclassified = 0;
   const total = stacks.length;
   let complete = true;
+  let nextIndex = startIndex;
 
-  for (let i = 0; i < stacks.length; i++) {
+  for (let i = startIndex; i < stacks.length; i++) {
     const cancelled = checkCancel();
     if (!cancelled.continue) {
       await persistStackRecords(opts.stackStore);
-      return { cancelled: cancelled.result, reclassified, client, complete: false };
+      return {
+        cancelled: cancelled.result,
+        reclassified,
+        client,
+        complete: false,
+        nextIndex: i,
+      };
     }
     if (deadline.expired()) {
       complete = false;
+      nextIndex = i;
       break;
     }
 
@@ -1314,7 +1338,17 @@ async function reclassifyAllStacks(opts) {
     });
 
     const urlKey = normalizeUrlKey(stack.url || '');
-    if (!urlKey) continue;
+    if (!urlKey) {
+      nextIndex = i + 1;
+      if (typeof onStackProgress === 'function') {
+        try {
+          await onStackProgress(nextIndex);
+        } catch {
+          // fail-soft
+        }
+      }
+      continue;
+    }
 
     const contentHash = await computeContentHash({
       title: stack.title || '',
@@ -1325,6 +1359,14 @@ async function reclassifyAllStacks(opts) {
     const allowLlm = metrics == null || canSpendLlmCall(metrics, dailyQuota);
     if (!allowLlm) {
       bumpStats({ classifyErrors: (getStats().classifyErrors || 0) + 1 });
+      nextIndex = i + 1;
+      if (typeof onStackProgress === 'function') {
+        try {
+          await onStackProgress(nextIndex);
+        } catch {
+          // fail-soft
+        }
+      }
       continue;
     }
 
@@ -1383,11 +1425,22 @@ async function reclassifyAllStacks(opts) {
         ...getStats(),
       });
     }
+
+    nextIndex = i + 1;
+    if (typeof onStackProgress === 'function') {
+      try {
+        await onStackProgress(nextIndex);
+      } catch {
+        // fail-soft
+      }
+    }
   }
+
+  if (complete) nextIndex = stacks.length;
 
   await persistStackRecords(opts.stackStore);
   await persistTopicCache(topicCache);
-  return { reclassified, client, complete };
+  return { reclassified, client, complete, nextIndex };
 }
 
 export { TAB_GROUP_ID_NONE };

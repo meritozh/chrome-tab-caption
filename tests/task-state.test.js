@@ -37,16 +37,22 @@ describe('organize task state machine', () => {
       jobId: 'reorg-1',
       reorganize: true,
       stacksDone: false,
+      stackIndex: 0,
     });
     assert.equal(cp.reorganize, true);
     assert.equal(cp.clearCache, true);
     assert.equal(cp.bypassCache, true);
     assert.equal(cp.reclassifyStacks, true);
+    assert.equal(cp.stackIndex, 0);
     assert.equal(hasPendingStackReclassify(cp), true);
-    const advanced = advancePhase(cp, JOB_PHASES.REFINE, { stacksDone: true });
+    const advanced = advancePhase(cp, JOB_PHASES.REFINE, {
+      stacksDone: true,
+      stackIndex: 4,
+    });
     assert.equal(advanced.reorganize, true);
     assert.equal(advanced.reclassifyStacks, true);
     assert.equal(advanced.stacksDone, true);
+    assert.equal(advanced.stackIndex, 4);
     assert.equal(hasPendingStackReclassify(advanced), false);
   });
 
@@ -58,13 +64,32 @@ describe('organize task state machine', () => {
       refineQueue: [],
       refineIndex: 0,
       stacksDone: false,
+      stackIndex: 3,
       resumeCount: 1,
     });
     const summary = summarizeJobState(cp);
     assert.equal(summary.remaining, 0);
     assert.equal(summary.stacksPending, true);
+    assert.equal(summary.stackIndex, 3);
     assert.equal(summary.resumable, true);
     assert.equal(summary.alarmResume, true);
+  });
+
+  it('advances stackIndex cursor without marking stacksDone', () => {
+    const cp = createOrganizeCheckpoint({
+      jobId: 'reorg-cursor',
+      phase: JOB_PHASES.REFINE,
+      reorganize: true,
+      stackIndex: 0,
+      stacksDone: false,
+    });
+    const mid = advancePhase(cp, JOB_PHASES.INTERRUPTED, {
+      stackIndex: 2,
+      stacksDone: false,
+    });
+    assert.equal(mid.stackIndex, 2);
+    assert.equal(mid.stacksDone, false);
+    assert.equal(hasPendingStackReclassify(mid), true);
   });
 
   it('classifies resumable vs terminal phases', () => {

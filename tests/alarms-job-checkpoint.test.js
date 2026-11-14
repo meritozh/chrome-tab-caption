@@ -143,8 +143,10 @@ describe('organize checkpoint persistence', () => {
       ],
       refineIndex: 1, // all tabs classified
       stacksDone: false,
+      stackIndex: 2,
     });
     assert.equal(remainingRefineItems(stacksPending).length, 0);
+    assert.equal(stacksPending.stackIndex, 2);
     assert.equal(shouldResumeCheckpoint(stacksPending), true);
 
     const stacksDone = createOrganizeCheckpoint({

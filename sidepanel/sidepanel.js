@@ -308,12 +308,18 @@ function suppressJob(jobId) {
  * Remember alarm-resume job ids even when UI adopt is deferred.
  * @param {Record<string, unknown>} state
  */
+function alarmResumeHasWork(state) {
+  return (
+    Number(state?.remaining) > 0 || state?.stacksPending === true
+  );
+}
+
 function noteAlarmJob(state) {
   const jobId = typeof state?.jobId === 'string' ? state.jobId : null;
   if (
     state?.alarmResume === true &&
     jobId &&
-    Number(state?.remaining) > 0 &&
+    alarmResumeHasWork(state) &&
     !suppressedJobIds.has(jobId)
   ) {
     knownAlarmJobId = jobId;
@@ -330,7 +336,7 @@ function adoptAlarmResumeState(state) {
   const jobId = typeof state?.jobId === 'string' ? state.jobId : null;
   const isAlarmResume =
     state?.alarmResume === true &&
-    Number(state?.remaining) > 0 &&
+    alarmResumeHasWork(state) &&
     jobId &&
     !suppressedJobIds.has(jobId);
   // Never hijack a busy / in-flight Organize started from this panel.
@@ -347,8 +353,12 @@ function adoptAlarmResumeState(state) {
   lastLlmCallsAttempted = Number(state.llmCallsAttempted) || lastLlmCallsAttempted;
   lastClassified = Number(state.classified) || lastClassified;
   setBusy(true);
+  const remaining = Number(state.remaining) || 0;
   setOrganizeStatus({
-    raw: `Alarm resume — ${state.remaining} tabs queued…`,
+    raw:
+      remaining > 0
+        ? `Alarm resume — ${remaining} tabs queued…`
+        : 'Alarm resume — reclassifying stacks…',
   });
   setOrganizeProgressVisible(true);
   return true;

@@ -57,6 +57,7 @@ import {
   summarizeJobState,
 } from './job-checkpoint.js';
 import { isTerminalPhase, JOB_PHASES } from '../shared/task-state.js';
+import { shouldScheduleReclaimAfterOrganize } from '../shared/organize-reclaim.js';
 
 /** @type {TopicCacheLru} */
 let topicCache = new TopicCacheLru(DEFAULT_CONFIG.cacheSize);
@@ -601,12 +602,17 @@ async function runDedupePass() {
 
 /**
  * After Organize: skip reclaim when single-window merge already applied the
- * lastAccessed keep-set (otherwise maybeReclaim can steal from that set).
+ * lastAccessed keep-set, or when stack reclassify was interrupted mid-pass.
  * Used by GROUP_TABS and alarm resume.
- * @param {{ ok?: boolean, merge?: unknown } | null | undefined} result
+ * @param {{
+ *   ok?: boolean,
+ *   merge?: unknown,
+ *   stacksPending?: boolean,
+ *   timeout?: boolean,
+ * } | null | undefined} result
  */
 function scheduleReclaimAfterOrganize(result) {
-  if (result?.ok && result?.merge) return;
+  if (!shouldScheduleReclaimAfterOrganize(result)) return;
   scheduleReclaim();
 }
 
