@@ -5,6 +5,7 @@
 import { DEFAULT_CONFIG, MSG } from '../shared/constants.js';
 import { API_KEY_REDACTED, isApiKeyUnchanged } from '../shared/config.js';
 import { sendToBackground } from '../shared/messages.js';
+import { requestOrganizePermissions } from '../shared/permissions.js';
 
 const fields = [
   'llmProvider',
@@ -137,13 +138,35 @@ document.getElementById('options-form')?.addEventListener('submit', async (e) =>
 
 document.getElementById('btn-test-llm')?.addEventListener('click', async () => {
   const status = document.getElementById('test-status');
-  status.textContent = 'Testing (mock)…';
+  status.textContent = 'Testing live LLM…';
+  // Sync form read only — FIRST await must be permissions.request (user gesture).
+  const form = readForm();
+  const provider = /** @type {string} */ (form.llmProvider || '');
+  const endpointBaseUrl = /** @type {string} */ (form.endpointBaseUrl || '');
+  const allowed = await requestOrganizePermissions({
+    endpointBaseUrl,
+    provider,
+    includeExtractHosts: false,
+    includeAllProviderDefaults: true,
+  });
+  if (!allowed) {
+    status.textContent =
+      'Host permission denied. Grant LLM endpoint access, then Test connection again.';
+    return;
+  }
+  // Pass the same in-form LLM fields used for permission so unsaved edits are pinged.
   const res = await sendToBackground(MSG.TEST_LLM, {
     url: 'https://example.com/connection-test',
     title: 'Connection test',
+    config: {
+      llmProvider: form.llmProvider,
+      endpointBaseUrl: form.endpointBaseUrl,
+      apiKey: form.apiKey,
+      model: form.model,
+    },
   });
   status.textContent = res?.ok
-    ? `Mock OK — topic “${res.result?.topic ?? '?'}”. Preview fields listed; real Anthropic/Responses run on confirmed Organize.`
+    ? `Live OK — topic “${res.result?.topic ?? '?'}”. Endpoint reachable.`
     : `Failed: ${res?.error || 'unknown'}`;
 });
 

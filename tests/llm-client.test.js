@@ -1,12 +1,13 @@
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  MockLlmClient,
   AnthropicLlmClient,
   OpenAiResponsesLlmClient,
   buildClassifyPayloadPreview,
   buildClassifyUserPrompt,
   createLlmClient,
+  isLlmConfigured,
+  LLM_CONFIG_REQUIRED_MESSAGE,
   parseClassifyResponseText,
   extractAnthropicText,
   extractOpenAiResponsesText,
@@ -14,14 +15,16 @@ import {
 } from '../shared/llm-client.js';
 
 describe('llm-client', () => {
-  it('mock classifies without network', async () => {
-    const client = new MockLlmClient();
-    const result = await client.classifyTopic({
-      url: 'https://www.news.example/story',
-      title: 'Story',
-    });
-    assert.equal(typeof result.topic, 'string');
-    assert.ok(result.topic.length > 0);
+  it('isLlmConfigured requires supported provider + non-empty apiKey', () => {
+    assert.equal(isLlmConfigured(null), false);
+    assert.equal(isLlmConfigured({ provider: 'anthropic' }), false);
+    assert.equal(isLlmConfigured({ provider: 'anthropic', apiKey: '   ' }), false);
+    assert.equal(isLlmConfigured({ llmProvider: 'anthropic', apiKey: 'sk-x' }), true);
+    assert.equal(
+      isLlmConfigured({ provider: 'openai-responses', apiKey: 'sk-o' }),
+      true,
+    );
+    assert.equal(isLlmConfigured({ provider: 'other', apiKey: 'sk-x' }), false);
   });
 
   it('preview lists privacy fields without api key', () => {
@@ -34,14 +37,23 @@ describe('llm-client', () => {
     assert.ok(!JSON.stringify(preview).includes('sk-'));
   });
 
-  it('factory returns mock when key missing or useMock', () => {
-    assert.ok(createLlmClient({ provider: 'anthropic' }) instanceof MockLlmClient);
-    assert.ok(
-      createLlmClient({
-        provider: 'anthropic',
-        apiKey: 'sk-x',
-        useMock: true,
-      }) instanceof MockLlmClient,
+  it('factory refuses without provider or apiKey (no mock)', () => {
+    assert.throws(
+      () => createLlmClient({ provider: 'anthropic' }),
+      (err) =>
+        err instanceof Error && err.message.includes('LLM is not configured'),
+    );
+    assert.throws(
+      () => createLlmClient({ apiKey: 'sk-x' }),
+      (err) => err instanceof Error && err.message === LLM_CONFIG_REQUIRED_MESSAGE,
+    );
+    assert.throws(
+      () =>
+        createLlmClient({
+          provider: 'unknown-provider',
+          apiKey: 'sk-x',
+        }),
+      /Unsupported LLM provider/,
     );
   });
 
@@ -103,7 +115,9 @@ describe('llm-client', () => {
   });
 
   it('parses classify JSON and provider text extractors', () => {
-    const parsed = parseClassifyResponseText('{"topic":"Space Flight","synonyms":["rockets"],"confidence":0.9}');
+    const parsed = parseClassifyResponseText(
+      '{"topic":"Space Flight","synonyms":["rockets"],"confidence":0.9}',
+    );
     assert.equal(parsed.topic, 'Space Flight');
     assert.deepEqual(parsed.synonyms, ['rockets']);
 
@@ -132,5 +146,64 @@ describe('llm-client', () => {
       joinEndpoint('https://api.anthropic.com/', '/v1/messages'),
       'https://api.anthropic.com/v1/messages',
     );
+  });
+
+  it('classifyTopic uses stubbed fetch (network client fixture)', async () => {
+    const client = new AnthropicLlmClient({
+      provider: 'anthropic',
+      apiKey: 'sk-test',
+      model: 'claude-test',
+      endpointBaseUrl: 'https://api.anthropic.com',
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock.fn(async () => ({
+      ok: true,
+      async json() {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: '{"topic":"Fixture Topic","synonyms":[],"confidence":0.8}',
+            },
+          ],
+        };
+      },
+    }));
+    try {
+      const result = await client.classifyTopic({
+        url: 'https://news.example/story',
+        title: 'Story',
+      });
+      assert.equal(result.topic, 'Fixture Topic');
+      assert.equal(globalThis.fetch.mock.callCount(), 1);
+      const [calledUrl, init] = globalThis.fetch.mock.calls[0].arguments;
+      assert.match(String(calledUrl), /\/v1\/messages$/);
+      assert.equal(init.headers['x-api-key'], 'sk-test');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('ping() issues a real classify-shaped request via stubbed fetch', async () => {
+    const client = createLlmClient({
+      provider: 'openai-responses',
+      apiKey: 'sk-ping',
+      model: 'gpt-test',
+      endpointBaseUrl: 'https://api.openai.com',
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock.fn(async () => ({
+      ok: true,
+      async json() {
+        return { output_text: '{"topic":"Ping Ok","synonyms":[],"confidence":1}' };
+      },
+    }));
+    try {
+      const result = await client.ping();
+      assert.equal(result.topic, 'Ping Ok');
+      assert.equal(globalThis.fetch.mock.callCount(), 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

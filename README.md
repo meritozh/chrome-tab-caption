@@ -31,7 +31,7 @@ Product decisions: `docs/decisions-log.md` (Accepted + §10 borrow notes). Store
 7. Side Panel → **Organize tabs** (All windows) → review privacy preview → **Confirm & classify** → tabs merge into one window
 8. Options → **Local metrics** shows on-device counters (organize / LLM / dedupe / reclaim / alarm resumes)
 
-`TEST_LLM` uses a mock client. API keys stay in `chrome.storage.local` only — never commit them. If the service worker sleeps mid-Organize, a checkpoint + `chrome.alarms` resume continues the refine queue.
+`TEST_LLM` hits your configured Anthropic/OpenAI Responses endpoint (no mock). Organize requires a working provider + API key — there is no hostname topic fallback. API keys stay in `chrome.storage.local` only — never commit them. If the service worker sleeps mid-Organize, a checkpoint + `chrome.alarms` resume continues the refine queue.
 
 ### Try Search (Side Panel)
 

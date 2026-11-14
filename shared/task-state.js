@@ -70,7 +70,6 @@ const TERMINAL = new Set([
  *   llmCallsAttempted: number,
  *   classified: number,
  *   classifyErrors: number,
- *   useMock: boolean,
  *   resumeCount: number,
  * }} OrganizeCheckpoint
  */
@@ -99,7 +98,6 @@ export function createOrganizeCheckpoint(partial) {
     llmCallsAttempted: Math.max(0, Number(partial.llmCallsAttempted) || 0),
     classified: Math.max(0, Number(partial.classified) || 0),
     classifyErrors: Math.max(0, Number(partial.classifyErrors) || 0),
-    useMock: partial.useMock === true,
     resumeCount: Math.max(0, Number(partial.resumeCount) || 0),
   };
 }

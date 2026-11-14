@@ -16,6 +16,7 @@ Canonical product ADR lives in the Project store (`docs/tab-manager-adr.md`). Th
 10. **Stack overflow** — Warn first; user chooses export or discard.
 11. **UI** — Side Panel primary + simple Options; no extra onboarding. **Toolbar icon toggles** the Side Panel (open↔close). Organize CTA lives **only** in the Side Panel (Options = settings only).
 12. **Privacy UX** — Always show payload fields + preview before real LLM calls.
+13. **Live LLM only** — No mock / hostname topic fallback. Organize and `TEST_LLM` require a configured, reachable user LLM; cache hits may still apply, but new topics are never invented locally.
 
 ## Engineering (Borrowed / Skipped from smart-tab-pilot)
 
