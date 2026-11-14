@@ -58,11 +58,6 @@ export const MESSAGES = {
     'organize.calls': 'calls',
     'organize.classifiedNote': ' ({n} classified before cancel)',
 
-    'topics.heading': 'Topics',
-    'topics.help': 'From the last Organize — physical groups live in the merged window.',
-    'topics.empty': 'No topics yet — run Organize.',
-    'topics.meta': ' · {tabs} tabs · windows {windows}',
-
     'search.heading': 'Search',
     'search.help': 'Fuzzy + pinyin over open tabs and Stacks. ↑↓ then Enter.',
     'search.placeholder': 'Title, URL, topic (pinyin OK)',
@@ -202,11 +197,6 @@ export const MESSAGES = {
     'organize.call': '调用',
     'organize.calls': '调用',
     'organize.classifiedNote': '（取消前已分类 {n}）',
-
-    'topics.heading': '主题',
-    'topics.help': '来自上次整理 — 物理分组位于合并后的窗口中。',
-    'topics.empty': '尚无主题 — 请运行整理。',
-    'topics.meta': ' · {tabs} 个标签页 · 窗口 {windows}',
 
     'search.heading': '搜索',
     'search.help': '对打开标签页与堆栈进行模糊 / 拼音搜索。↑↓ 后按 Enter。',

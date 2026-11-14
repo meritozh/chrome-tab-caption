@@ -232,11 +232,6 @@ body {
   border-top: 1px solid var(--line);
 }
 
-.sp-section-compact .sp-list {
-  max-height: 4.25rem;
-  overflow: auto;
-}
-
 .sp-stacks-section {
   flex: 1 1 auto;
   min-height: 0;
@@ -424,8 +419,7 @@ select:disabled {
   background: var(--gray-4);
 }
 
-.sp-results,
-.sp-list {
+.sp-results {
   margin: 0.35rem 0 0;
   padding: 0;
   list-style: none;
@@ -433,11 +427,6 @@ select:disabled {
 
 .sp-appear > * {
   animation: sp-appear 280ms var(--ease-out) both;
-}
-
-.sp-list li {
-  padding: 0.4rem 0;
-  border-bottom: 1px solid var(--gray-4);
 }
 
 .sp-search-section {
