@@ -26,6 +26,7 @@ import {
   createLlmClient,
   isLlmConfigured,
   LLM_CONFIG_REQUIRED_MESSAGE,
+  normalizeExistingTopics,
 } from '../shared/llm-client.js';
 import { hasEndpointPermission } from '../shared/permissions.js';
 import { capExcerpt, persistTopicCache } from '../shared/topic-cache.js';
@@ -42,11 +43,60 @@ import {
 } from '../shared/task-state.js';
 import { canSpendLlmCall } from '../shared/metrics.js';
 import { finalizeSingleWindowOrganize } from './window-merge.js';
+import { persistStackRecords } from '../shared/stack-records.js';
 
 /**
  * @typedef {import('../shared/topic-cache.js').TopicCacheLru} TopicCacheLru
  * @typedef {import('../shared/physical-groups.js').TabTopicAssignment} TabTopicAssignment
  */
+
+/**
+ * Distinct topic labels currently used by Chrome tab groups in scope.
+ * @param {'all' | 'current'} scope
+ * @param {number} [currentWindowId]
+ * @returns {Promise<string[]>}
+ */
+export async function listPhysicalGroupTopicLabels(scope, currentWindowId) {
+  try {
+    const tabs = await queryTabsForScope(scope, currentWindowId);
+    /** @type {Set<number>} */
+    const groupIds = new Set();
+    for (const tab of tabs) {
+      const gid = tab?.groupId;
+      if (typeof gid === 'number' && gid !== TAB_GROUP_ID_NONE && gid >= 0) {
+        groupIds.add(gid);
+      }
+    }
+    /** @type {string[]} */
+    const titles = [];
+    for (const groupId of groupIds) {
+      try {
+        const group = await chrome.tabGroups.get(groupId);
+        if (group?.title) titles.push(String(group.title));
+      } catch {
+        // group may have closed
+      }
+    }
+    return normalizeExistingTopics(titles);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Labels already assigned this run (registry) + seed physical groups.
+ * @param {Map<string, { label?: string }>} topicRegistry
+ * @param {string[]} [seedLabels]
+ */
+export function existingTopicsForClassify(topicRegistry, seedLabels = []) {
+  const fromRegistry = [];
+  if (topicRegistry && typeof topicRegistry.values === 'function') {
+    for (const rec of topicRegistry.values()) {
+      if (rec?.label) fromRegistry.push(rec.label);
+    }
+  }
+  return normalizeExistingTopics([...(seedLabels || []), ...fromRegistry]);
+}
 
 /**
  * Broadcast progress to Side Panel (fail-soft if no listeners).
@@ -269,6 +319,10 @@ async function emitCheckpoint(onCheckpoint, checkpoint) {
  * @param {(pending: object | null) => Promise<void> | void} [opts.setOverflowPending]
  * @param {object | null} [opts.overflowPending]
  * @param {{ push: (e: object) => object }} [opts.activityLog]
+ * @param {boolean} [opts.clearCache] — wipe topic cache before classify
+ * @param {boolean} [opts.bypassCache] — never use cache hits this run
+ * @param {boolean} [opts.reorganize] — clear cache, bypass hits, reclassify Stacks
+ * @param {boolean} [opts.reclassifyStacks] — refresh topics on all Stack records
  */
 export async function groupTabsOnDemand(opts) {
   const resuming = isOrganizeCheckpoint(opts.resumeFrom);
@@ -283,6 +337,36 @@ export async function groupTabsOnDemand(opts) {
   const config = opts.config;
   const topicCache = opts.topicCache;
   const signal = opts.signal;
+  // Prefer explicit opts; on alarm resume fall back to checkpoint flags.
+  const reorganize =
+    opts.reorganize === true || resumeCp?.reorganize === true;
+  const clearCache =
+    !resuming && (opts.clearCache === true || reorganize || resumeCp?.clearCache === true);
+  const bypassCache =
+    opts.bypassCache === true ||
+    reorganize ||
+    resumeCp?.bypassCache === true;
+  const reclassifyStacks =
+    opts.reclassifyStacks === true ||
+    reorganize ||
+    resumeCp?.reclassifyStacks === true;
+  let stacksDone = resumeCp?.stacksDone === true;
+  /** @type {string[]} */
+  let processedStackIds = Array.isArray(resumeCp?.processedStackIds)
+    ? resumeCp.processedStackIds.slice()
+    : [];
+  /** Organize prefers existing topics; Reorganize must not. */
+  const preferExistingTopics = !reorganize;
+  /** @type {string[]} */
+  let seedExistingTopics = [];
+  if (preferExistingTopics) {
+    seedExistingTopics = await listPhysicalGroupTopicLabels(
+      scope,
+      typeof opts.currentWindowId === 'number'
+        ? opts.currentWindowId
+        : resumeCp?.currentWindowId ?? undefined,
+    );
+  }
   const onCheckpoint = opts.onCheckpoint;
   const onLlmSpend = opts.onLlmSpend;
   const metrics = opts.metrics;
@@ -345,6 +429,12 @@ export async function groupTabsOnDemand(opts) {
     classifyErrors,
     llmCallsAttempted,
     resumeCount,
+    reorganize,
+    clearCache: clearCache || resumeCp?.clearCache === true || reorganize,
+    bypassCache,
+    reclassifyStacks,
+    stacksDone,
+    processedStackIds,
     phase: resuming ? JOB_PHASES.REFINE : JOB_PHASES.QUEUED,
   });
 
@@ -402,6 +492,19 @@ export async function groupTabsOnDemand(opts) {
     return earlyCancel.result;
   }
 
+  if (clearCache && !resuming) {
+    topicCache.clear();
+    await persistTopicCache(topicCache);
+    broadcastProgress({
+      jobId,
+      phase: 'clear-cache',
+      done: 0,
+      total: 0,
+      messageKey: 'progress.clearedCache',
+      message: 'Cleared topic cache…',
+    });
+  }
+
   /** @type {{ tab: chrome.tabs.Tab, urlKey: string, contentHash: string }[]} */
   let refineQueue = [];
   let total = checkpoint.total || 0;
@@ -455,10 +558,13 @@ export async function groupTabsOnDemand(opts) {
       phase: 'quick-pass',
       done: 0,
       total,
-      message: 'Quick pass: applying cached topics…',
+      messageKey: bypassCache ? 'organize.reorganizing' : 'progress.quickPass',
+      message: bypassCache
+        ? 'Reorganizing — classifying all tabs…'
+        : 'Quick pass: applying cached topics…',
     });
 
-    // Pass 1 — cache hits
+    // Pass 1 — cache hits (skipped entirely when bypassCache / reorganize)
     for (let i = 0; i < allTabs.length; i++) {
       const cancelled = checkCancel();
       if (!cancelled.continue) {
@@ -484,7 +590,7 @@ export async function groupTabsOnDemand(opts) {
         excerpt: '',
         url: urlKey,
       });
-      const hit = topicCache.lookup(urlKey, contentHash);
+      const hit = bypassCache ? null : topicCache.lookup(urlKey, contentHash);
       if (hit) {
         const topic = mergeTopicResult(
           { topic: hit.topicLabel, synonyms: [] },
@@ -733,8 +839,10 @@ export async function groupTabsOnDemand(opts) {
       url: urlKey,
     });
 
-    // Re-check cache with richer hash (title+excerpt)
-    const rehit = topicCache.lookup(urlKey, contentHash) || topicCache.lookup(urlKey, priorHash);
+    // Re-check cache with richer hash (title+excerpt) — skipped when bypassing cache.
+    const rehit = bypassCache
+      ? null
+      : topicCache.lookup(urlKey, contentHash) || topicCache.lookup(urlKey, priorHash);
     /** @type {TabTopicAssignment | null} */
     let stepAssignment = null;
     if (rehit) {
@@ -804,6 +912,10 @@ export async function groupTabsOnDemand(opts) {
             title: tab.title || '',
             snippet: excerpt,
             extractedText: excerpt,
+            preferExisting: preferExistingTopics,
+            existingTopics: preferExistingTopics
+              ? existingTopicsForClassify(topicRegistry, seedExistingTopics)
+              : [],
           }),
           Math.min(TIMEOUTS.CLASSIFY_MS, Math.max(500, deadline.remaining())),
           'classify',
@@ -886,6 +998,129 @@ export async function groupTabsOnDemand(opts) {
     }
   }
 
+  // Reorganize: refresh topics on every Stack record (title/url classify; no live tab extract).
+  // Also runs after alarm resume when checkpoint kept reclassifyStacks / reorganize.
+  // Do NOT merge/apply/reclaim until stacksDone — a deadline cut must leave the keep-set alone.
+  let stacksReclassified = 0;
+  if (reclassifyStacks && opts.stackStore && !stacksDone) {
+    const stackResult = await reclassifyAllStacks({
+      stackStore: opts.stackStore,
+      topicCache,
+      topicRegistry,
+      config,
+      client,
+      signal,
+      deadline,
+      metrics,
+      dailyQuota,
+      onLlmSpend,
+      jobId,
+      processedStackIds,
+      checkCancel,
+      getStats: () => ({ llmCallsAttempted, classified, classifyErrors }),
+      bumpStats: (patch) => {
+        if (typeof patch.llmCallsAttempted === 'number') {
+          llmCallsAttempted = patch.llmCallsAttempted;
+        }
+        if (typeof patch.classified === 'number') classified = patch.classified;
+        if (typeof patch.classifyErrors === 'number') {
+          classifyErrors = patch.classifyErrors;
+        }
+      },
+      onStackProgress: async (ids) => {
+        processedStackIds = Array.isArray(ids) ? ids.slice() : processedStackIds;
+        await emitCheckpoint(
+          onCheckpoint,
+          snapshotCheckpoint(JOB_PHASES.REFINE, {
+            total,
+            stacksDone: false,
+            processedStackIds,
+            // Keep resume age window alive across long Reorganize / alarm gaps.
+            startedAt: Date.now(),
+          }),
+        );
+      },
+    });
+    if (stackResult.cancelled) {
+      await persistTopicCache(topicCache);
+      processedStackIds = stackResult.processedStackIds ?? processedStackIds;
+      await emitCheckpoint(
+        onCheckpoint,
+        snapshotCheckpoint(JOB_PHASES.CANCELLED, {
+          total,
+          stacksDone: false,
+          processedStackIds,
+        }),
+      );
+      return stackResult.cancelled;
+    }
+    if (stackResult.needsLlmConfig) {
+      await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.ERROR, { total }));
+      return stackResult.needsLlmConfig;
+    }
+    stacksReclassified = stackResult.reclassified || 0;
+    client = stackResult.client ?? client;
+    processedStackIds = stackResult.processedStackIds ?? processedStackIds;
+    // Only mark stacksDone when every *current* stack id was processed — never
+    // because a positional index fell past a mutated list length.
+    if (stackResult.complete) {
+      stacksDone = true;
+      await emitCheckpoint(
+        onCheckpoint,
+        snapshotCheckpoint(JOB_PHASES.REFINE, {
+          total,
+          stacksDone: true,
+          processedStackIds,
+        }),
+      );
+    } else {
+      stacksDone = false;
+      await persistTopicCache(topicCache);
+      await emitCheckpoint(
+        onCheckpoint,
+        snapshotCheckpoint(JOB_PHASES.INTERRUPTED, {
+          total,
+          stacksDone: false,
+          processedStackIds,
+          startedAt: Date.now(),
+        }),
+      );
+      broadcastProgress({
+        jobId,
+        phase: 'timeout',
+        done: assignments.length,
+        total,
+        messageKey: 'organize.stacksPaused',
+        message: 'Organize budget exhausted during stack reclassify — will resume.',
+        llmCallsAttempted,
+        classified,
+      });
+      // No merge / apply / reclaim — keep-set must not be touched until stacks finish.
+      return {
+        ok: false,
+        timeout: true,
+        stacksPending: true,
+        stub: false,
+        jobId,
+        scope,
+        logical: buildLogicalTopicViews(assignments),
+        assignments: assignments.slice(),
+        physical,
+        merge: null,
+        classified,
+        classifyErrors,
+        llmCallsAttempted,
+        resumeCount,
+        stacksReclassified,
+        processedStackIds,
+        reorganize: reorganize || undefined,
+        cacheSize: topicCache.size,
+        latestWinsAt: Date.now(),
+        latestWinsSource: reorganize ? 'extension-reorganize' : 'extension-organize',
+      };
+    }
+  }
+
   await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.APPLYING, { total }));
   collapseHeuristicSynonyms(assignments, topicRegistry);
 
@@ -948,6 +1183,7 @@ export async function groupTabsOnDemand(opts) {
   const logical = buildLogicalTopicViews(finalAssignments);
 
   await persistTopicCache(topicCache);
+
   await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.DONE, { total }));
 
   broadcastProgress({
@@ -982,10 +1218,287 @@ export async function groupTabsOnDemand(opts) {
     classifyErrors,
     llmCallsAttempted,
     resumeCount,
+    stacksReclassified,
+    reorganize: reorganize || undefined,
     cacheSize: topicCache.size,
     latestWinsAt: Date.now(),
-    latestWinsSource: 'extension-organize',
+    latestWinsSource: reorganize ? 'extension-reorganize' : 'extension-organize',
   };
+}
+
+/**
+ * Remaining stack records not yet in the processed-id set (stable across list mutations).
+ * @param {{ id?: string }[]} stacks
+ * @param {Iterable<string>} processedIds
+ */
+export function remainingStacksForReclassify(stacks, processedIds) {
+  const done = new Set(
+    [...(processedIds || [])].map((id) => String(id || '')).filter(Boolean),
+  );
+  const list = Array.isArray(stacks) ? stacks : [];
+  return list.filter((s) => s?.id && !done.has(String(s.id)));
+}
+
+/**
+ * Progress counts relative to the *current* stack list (intersection of
+ * processed ids with live ids) so discarded/recalled ids cannot inflate current.
+ * @param {{ id?: string }[]} stacks
+ * @param {Iterable<string>} processedIds
+ * @returns {{ done: number, total: number, current: number }}
+ */
+export function stackReclassifyProgressCounts(stacks, processedIds) {
+  const done = new Set(
+    [...(processedIds || [])].map((id) => String(id || '')).filter(Boolean),
+  );
+  const list = Array.isArray(stacks) ? stacks : [];
+  const liveIds = list
+    .map((s) => (s?.id ? String(s.id) : ''))
+    .filter(Boolean);
+  const total = liveIds.length;
+  const doneOnLive = liveIds.filter((id) => done.has(id)).length;
+  const pending = total - doneOnLive;
+  return {
+    done: doneOnLive,
+    total,
+    // Next item about to run, or total when finished.
+    current: pending > 0 ? doneOnLive + 1 : total,
+  };
+}
+
+/**
+ * Reclassify every StackRecord via LLM (or skip when quota exhausted).
+ * Updates stackStore in place and persists; also upserts topic cache.
+ * Resume skips ids already in processedStackIds (not a positional index).
+ *
+ * @param {object} opts
+ */
+async function reclassifyAllStacks(opts) {
+  const stacks = opts.stackStore?.list?.() ?? [];
+  /** @type {Set<string>} */
+  const processed = new Set(
+    (Array.isArray(opts.processedStackIds) ? opts.processedStackIds : [])
+      .map((id) => String(id || ''))
+      .filter(Boolean),
+  );
+  const pending = remainingStacksForReclassify(stacks, processed);
+  if (!stacks.length || pending.length === 0) {
+    // Complete only when every *current* stack id is processed (or none exist).
+    return {
+      reclassified: 0,
+      client: opts.client,
+      complete: true,
+      processedStackIds: [...processed],
+    };
+  }
+
+  let client = opts.client;
+  const config = opts.config;
+  const topicCache = opts.topicCache;
+  const topicRegistry = opts.topicRegistry;
+  const deadline = opts.deadline;
+  const metrics = opts.metrics;
+  const dailyQuota = opts.dailyQuota;
+  const onLlmSpend = opts.onLlmSpend;
+  const jobId = opts.jobId;
+  const checkCancel = opts.checkCancel;
+  const getStats = opts.getStats;
+  const bumpStats = opts.bumpStats;
+  const onStackProgress = opts.onStackProgress;
+
+  if (!isLlmConfigured(config)) {
+    return {
+      needsLlmConfig: {
+        ok: false,
+        error: LLM_CONFIG_REQUIRED_MESSAGE,
+        needsLlmConfig: true,
+        jobId,
+        ...getStats(),
+        logical: [],
+        assignments: [],
+        physical: { applied: 0, errors: [] },
+      },
+    };
+  }
+
+  if (!client) {
+    const allowed = await hasEndpointPermission(
+      /** @type {string} */ (config.endpointBaseUrl || ''),
+      /** @type {string} */ (config.llmProvider || ''),
+    );
+    if (!allowed) {
+      return {
+        needsLlmConfig: {
+          ok: false,
+          error:
+            'Host permission for the LLM endpoint is missing. Run Organize again after granting access.',
+          needsPermission: true,
+          needsLlmConfig: false,
+          jobId,
+        },
+      };
+    }
+    try {
+      client = createLlmClient({
+        provider: /** @type {any} */ (config.llmProvider),
+        endpointBaseUrl: /** @type {string} */ (config.endpointBaseUrl || ''),
+        apiKey: /** @type {string} */ (config.apiKey || ''),
+        model: /** @type {string} */ (config.model || ''),
+      });
+    } catch (err) {
+      return {
+        needsLlmConfig: {
+          ok: false,
+          error: String(err?.message || err || LLM_CONFIG_REQUIRED_MESSAGE),
+          needsLlmConfig: true,
+          jobId,
+        },
+      };
+    }
+  }
+
+  let reclassified = 0;
+  let complete = true;
+
+  for (let i = 0; i < stacks.length; i++) {
+    const stack = stacks[i];
+    const stackId = stack?.id ? String(stack.id) : '';
+    if (!stackId || processed.has(stackId)) continue;
+
+    const cancelled = checkCancel();
+    if (!cancelled.continue) {
+      await persistStackRecords(opts.stackStore);
+      return {
+        cancelled: cancelled.result,
+        reclassified,
+        client,
+        complete: false,
+        processedStackIds: [...processed],
+      };
+    }
+    if (deadline.expired()) {
+      complete = false;
+      break;
+    }
+
+    // Counts vs live list only — discarded processed ids must not inflate current.
+    const liveStacks = opts.stackStore?.list?.() ?? stacks;
+    const { done, total, current } = stackReclassifyProgressCounts(
+      liveStacks,
+      processed,
+    );
+    broadcastProgress({
+      jobId,
+      phase: 'stacks',
+      done,
+      total,
+      current,
+      messageKey: 'progress.stacks',
+      messageParams: { current, total },
+      message: `Reclassifying stacks ${current}/${total}: ${stack.title || stack.url}`,
+      ...getStats(),
+    });
+
+    const markProcessed = async () => {
+      processed.add(stackId);
+      if (typeof onStackProgress === 'function') {
+        try {
+          await onStackProgress([...processed]);
+        } catch {
+          // fail-soft
+        }
+      }
+    };
+
+    const urlKey = normalizeUrlKey(stack.url || '');
+    if (!urlKey) {
+      await markProcessed();
+      continue;
+    }
+
+    const contentHash = await computeContentHash({
+      title: stack.title || '',
+      excerpt: '',
+      url: urlKey,
+    });
+
+    const allowLlm = metrics == null || canSpendLlmCall(metrics, dailyQuota);
+    if (!allowLlm) {
+      bumpStats({ classifyErrors: (getStats().classifyErrors || 0) + 1 });
+      await markProcessed();
+      continue;
+    }
+
+    bumpStats({ llmCallsAttempted: (getStats().llmCallsAttempted || 0) + 1 });
+    if (typeof onLlmSpend === 'function') {
+      try {
+        await onLlmSpend();
+      } catch {
+        // fail-soft
+      }
+    } else if (metrics && typeof metrics === 'object') {
+      metrics.dailyLlmCalls = (Number(metrics.dailyLlmCalls) || 0) + 1;
+      metrics.llmCalls = (Number(metrics.llmCalls) || 0) + 1;
+      metrics.dailyLlmDate =
+        metrics.dailyLlmDate || new Date().toISOString().slice(0, 10);
+    }
+
+    try {
+      const result = await withTimeout(
+        client.classifyTopic({
+          url: stack.url || '',
+          title: stack.title || '',
+          snippet: '',
+          extractedText: '',
+          // Stack reclassify is part of Reorganize — never prefer existing topics.
+          preferExisting: false,
+          existingTopics: [],
+        }),
+        Math.min(TIMEOUTS.CLASSIFY_MS, Math.max(500, deadline.remaining())),
+        'classify-stack',
+      );
+      const topic = mergeTopicResult(result, topicRegistry);
+      topicCache.upsert({
+        urlKey,
+        contentHash,
+        topicKey: topic.normalizedKey,
+        topicLabel: topic.label,
+        excerpt: '',
+      });
+      opts.stackStore.update(stack.id, {
+        topicKey: topic.normalizedKey,
+        topicLabel: topic.label,
+        groupTitle: topic.label,
+        groupColor: colorForTopicKey(topic.normalizedKey),
+      });
+      reclassified += 1;
+      bumpStats({ classified: (getStats().classified || 0) + 1 });
+    } catch (err) {
+      bumpStats({ classifyErrors: (getStats().classifyErrors || 0) + 1 });
+      const errCounts = stackReclassifyProgressCounts(
+        opts.stackStore?.list?.() ?? stacks,
+        processed,
+      );
+      broadcastProgress({
+        jobId,
+        phase: 'refine-error',
+        done: errCounts.done,
+        total: errCounts.total,
+        message: `Stack classify failed: ${err?.message || err}`,
+        ...getStats(),
+      });
+    }
+
+    await markProcessed();
+  }
+
+  // Re-read list: complete only if every current id was processed (mutations-safe).
+  const live = opts.stackStore?.list?.() ?? stacks;
+  complete =
+    complete && remainingStacksForReclassify(live, processed).length === 0;
+
+  await persistStackRecords(opts.stackStore);
+  await persistTopicCache(topicCache);
+  return { reclassified, client, complete, processedStackIds: [...processed] };
 }
 
 export { TAB_GROUP_ID_NONE };

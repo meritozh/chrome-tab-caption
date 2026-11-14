@@ -57,6 +57,7 @@ import {
   summarizeJobState,
 } from './job-checkpoint.js';
 import { isTerminalPhase, JOB_PHASES } from '../shared/task-state.js';
+import { shouldScheduleReclaimAfterOrganize } from '../shared/organize-reclaim.js';
 
 /** @type {TopicCacheLru} */
 let topicCache = new TopicCacheLru(DEFAULT_CONFIG.cacheSize);
@@ -433,6 +434,11 @@ async function maybeResumeOrganizeFromCheckpoint() {
       jobId,
       clientRunId: cp.clientRunId,
       resumeFrom: cp,
+      // Restore Reorganize semantics after SW sleep (checkpoint-backed).
+      reorganize: cp.reorganize === true,
+      clearCache: false,
+      bypassCache: cp.bypassCache === true || cp.reorganize === true,
+      reclassifyStacks: cp.reclassifyStacks === true || cp.reorganize === true,
     });
     if (result?.ok) {
       await rememberOrganizeState(result);
@@ -596,12 +602,17 @@ async function runDedupePass() {
 
 /**
  * After Organize: skip reclaim when single-window merge already applied the
- * lastAccessed keep-set (otherwise maybeReclaim can steal from that set).
+ * lastAccessed keep-set, or when stack reclassify was interrupted mid-pass.
  * Used by GROUP_TABS and alarm resume.
- * @param {{ ok?: boolean, merge?: unknown } | null | undefined} result
+ * @param {{
+ *   ok?: boolean,
+ *   merge?: unknown,
+ *   stacksPending?: boolean,
+ *   timeout?: boolean,
+ * } | null | undefined} result
  */
 function scheduleReclaimAfterOrganize(result) {
-  if (result?.ok && result?.merge) return;
+  if (!shouldScheduleReclaimAfterOrganize(result)) return;
   scheduleReclaim();
 }
 
@@ -815,7 +826,12 @@ function onMessage(message, sender, sendResponse) {
         }
         break;
       }
-      case MSG.GROUP_TABS: {
+      case MSG.GROUP_TABS:
+      case MSG.REORGANIZE_TABS: {
+        const reorganize =
+          type === MSG.REORGANIZE_TABS ||
+          message.reorganize === true ||
+          message.clearCache === true;
         const config = await loadConfig();
         if (!isLlmConfigured(config)) {
           sendResponse({
@@ -852,7 +868,7 @@ function onMessage(message, sender, sendResponse) {
           activeOrganizeJob = null;
         }
         const controller = new AbortController();
-        const jobId = `group-${Date.now()}`;
+        const jobId = `${reorganize ? 'reorg' : 'group'}-${Date.now()}`;
         activeOrganizeJob = { jobId, controller, clientRunId };
         // Re-check after registration — Cancel may have landed during loadConfig.
         if (clientRunId != null && cancelledClientRunIds.has(clientRunId)) {
@@ -871,6 +887,10 @@ function onMessage(message, sender, sendResponse) {
             signal: controller.signal,
             jobId,
             clientRunId,
+            clearCache: reorganize || message.clearCache === true,
+            bypassCache: reorganize || message.bypassCache === true,
+            reorganize,
+            reclassifyStacks: reorganize || message.reclassifyStacks === true,
           });
         } finally {
           if (activeOrganizeJob?.jobId === jobId) {
@@ -885,7 +905,9 @@ function onMessage(message, sender, sendResponse) {
           await rememberOrganizeState({
             logical: result.logical,
             latestWinsAt: Date.now(),
-            latestWinsSource: 'extension-organize-cancelled',
+            latestWinsSource: reorganize
+              ? 'extension-reorganize-cancelled'
+              : 'extension-organize-cancelled',
           });
         }
         scheduleReclaimAfterOrganize(result);

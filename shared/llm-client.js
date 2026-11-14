@@ -15,6 +15,8 @@ import { resolveEndpointBaseUrl, DEFAULT_ENDPOINT_BY_PROVIDER } from './permissi
  * @property {string} title
  * @property {string} [snippet]
  * @property {string} [extractedText]
+ * @property {string[]} [existingTopics] — English labels already in use
+ * @property {boolean} [preferExisting] — default true when topics provided; false for Reorganize
  */
 
 /**
@@ -38,9 +40,55 @@ export const CLASSIFY_SYSTEM_PROMPT =
   'Reply with a single JSON object only: {"topic":"English Topic","synonyms":["optional near-duplicate"],"confidence":0.0}. ' +
   'Topics must be short, specific, and English. Prefer merging near-duplicates via synonyms. No markdown.';
 
+export const CLASSIFY_PREFER_EXISTING_SYSTEM_SUFFIX =
+  ' When the user message lists existing topics, prefer assigning the tab to one of those topics when a good fit exists. ' +
+  'Only invent a new topic label when none of the existing topics fit.';
+
 /** User-facing when provider or API key is missing. */
 export const LLM_CONFIG_REQUIRED_MESSAGE =
   'LLM is not configured. Set provider and API key in Options before Organize or Test connection.';
+
+/**
+ * Normalize / de-dupe topic labels for the classify prompt (case-insensitive).
+ * @param {unknown} topics
+ * @returns {string[]}
+ */
+export function normalizeExistingTopics(topics) {
+  if (!Array.isArray(topics)) return [];
+  /** @type {string[]} */
+  const out = [];
+  const seen = new Set();
+  for (const raw of topics) {
+    const label = String(raw || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!label) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(label);
+  }
+  return out;
+}
+
+/**
+ * @param {Pick<ClassifyInput, 'preferExisting' | 'existingTopics'> | null | undefined} input
+ */
+export function shouldPreferExistingTopics(input) {
+  if (!input || input.preferExisting === false) return false;
+  return normalizeExistingTopics(input.existingTopics).length > 0;
+}
+
+/**
+ * System prompt for classify — appends prefer-existing guidance when applicable.
+ * @param {Pick<ClassifyInput, 'preferExisting' | 'existingTopics'> | null | undefined} [input]
+ */
+export function buildClassifySystemPrompt(input = null) {
+  if (shouldPreferExistingTopics(input)) {
+    return CLASSIFY_SYSTEM_PROMPT + CLASSIFY_PREFER_EXISTING_SYSTEM_SUFFIX;
+  }
+  return CLASSIFY_SYSTEM_PROMPT;
+}
 
 /**
  * True when config has a supported provider and a non-empty API key.
@@ -87,12 +135,21 @@ export function buildClassifyPayloadPreview(input, meta) {
  */
 export function buildClassifyUserPrompt(input) {
   const excerpt = capExcerpt(input.extractedText || input.snippet || '', EXCERPT_HARD_CAP_CHARS);
-  return [
+  const lines = [
     'Classify this tab into one fine-grained English topic.',
     `URL: ${input.url ?? ''}`,
     `Title: ${input.title ?? ''}`,
     excerpt ? `Excerpt: ${excerpt}` : 'Excerpt: (none)',
-  ].join('\n');
+  ];
+  if (shouldPreferExistingTopics(input)) {
+    const topics = normalizeExistingTopics(input.existingTopics);
+    lines.push('Existing topics (prefer these when a good fit):');
+    for (const topic of topics) {
+      lines.push(`- ${topic}`);
+    }
+    lines.push('Only create a new topic if none of the above fit.');
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -224,7 +281,7 @@ export class AnthropicLlmClient extends LlmClient {
     const body = {
       model: this.config.model,
       max_tokens: 200,
-      system: CLASSIFY_SYSTEM_PROMPT,
+      system: buildClassifySystemPrompt(input),
       messages: [{ role: 'user', content: buildClassifyUserPrompt(input) }],
     };
     return {
@@ -289,7 +346,7 @@ export class OpenAiResponsesLlmClient extends LlmClient {
     const url = joinEndpoint(base, '/v1/responses');
     const body = {
       model: this.config.model,
-      instructions: CLASSIFY_SYSTEM_PROMPT,
+      instructions: buildClassifySystemPrompt(input),
       input: buildClassifyUserPrompt(input),
       max_output_tokens: 200,
     };

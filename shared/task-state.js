@@ -71,8 +71,33 @@ const TERMINAL = new Set([
  *   classified: number,
  *   classifyErrors: number,
  *   resumeCount: number,
+ *   reorganize: boolean,
+ *   clearCache: boolean,
+ *   bypassCache: boolean,
+ *   reclassifyStacks: boolean,
+ *   stacksDone: boolean,
+ *   processedStackIds: string[],
  * }} OrganizeCheckpoint
  */
+
+/**
+ * Normalize processed stack id list (stable resume cursor — not a list index).
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+export function normalizeProcessedStackIds(value) {
+  if (!Array.isArray(value)) return [];
+  /** @type {string[]} */
+  const out = [];
+  const seen = new Set();
+  for (const raw of value) {
+    const id = typeof raw === 'string' ? raw.trim() : '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
 
 /**
  * @param {Partial<OrganizeCheckpoint> & { jobId: string }} partial
@@ -80,6 +105,7 @@ const TERMINAL = new Set([
  */
 export function createOrganizeCheckpoint(partial) {
   const now = Date.now();
+  const reorganize = partial.reorganize === true;
   return {
     jobId: String(partial.jobId),
     phase: partial.phase || JOB_PHASES.QUEUED,
@@ -99,6 +125,13 @@ export function createOrganizeCheckpoint(partial) {
     classified: Math.max(0, Number(partial.classified) || 0),
     classifyErrors: Math.max(0, Number(partial.classifyErrors) || 0),
     resumeCount: Math.max(0, Number(partial.resumeCount) || 0),
+    reorganize,
+    clearCache: partial.clearCache === true || reorganize,
+    bypassCache: partial.bypassCache === true || reorganize,
+    reclassifyStacks: partial.reclassifyStacks === true || reorganize,
+    stacksDone: partial.stacksDone === true,
+    /** Stack record ids already reclassified this job (stable across list mutations). */
+    processedStackIds: normalizeProcessedStackIds(partial.processedStackIds),
   };
 }
 
@@ -134,6 +167,15 @@ export function remainingRefineItems(checkpoint) {
   const idx = Math.max(0, Number(checkpoint.refineIndex) || 0);
   const queue = Array.isArray(checkpoint.refineQueue) ? checkpoint.refineQueue : [];
   return queue.slice(idx);
+}
+
+/**
+ * Reorganize still owes a stack reclassify pass (or a partial pass to finish).
+ * @param {OrganizeCheckpoint | null | undefined} checkpoint
+ */
+export function hasPendingStackReclassify(checkpoint) {
+  if (!isOrganizeCheckpoint(checkpoint)) return false;
+  return checkpoint.reclassifyStacks === true && checkpoint.stacksDone !== true;
 }
 
 /**
@@ -227,13 +269,17 @@ export function summarizeJobState(checkpoint) {
     };
   }
   const remaining = remainingRefineItems(checkpoint).length;
+  const stacksPending = hasPendingStackReclassify(checkpoint);
   const resumeCount = Math.max(0, Number(checkpoint.resumeCount) || 0);
   return {
     jobId: checkpoint.jobId,
     phase: checkpoint.phase,
     scope: checkpoint.scope,
     clientRunId: checkpoint.clientRunId,
-    resumable: isResumablePhase(checkpoint.phase) && remaining > 0,
+    resumable:
+      isResumablePhase(checkpoint.phase) && (remaining > 0 || stacksPending),
+    stacksPending,
+    processedStackIds: normalizeProcessedStackIds(checkpoint.processedStackIds),
     /**
      * True only for alarm/SW-sleep continuation — not a normal in-progress Organize.
      * Side Panel must adopt UI only when this is set (avoid hijacking an in-flight Organize).

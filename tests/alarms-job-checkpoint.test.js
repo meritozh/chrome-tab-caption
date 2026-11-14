@@ -16,6 +16,8 @@ import {
   saveOrganizeCheckpoint,
   interruptOrganizeCheckpoint,
   shouldResumeCheckpoint,
+  remainingRefineItems,
+  ORGANIZE_RESUME_MAX_AGE_MS,
 } from '../background/job-checkpoint.js';
 import { SESSION_KEYS } from '../shared/constants.js';
 
@@ -130,5 +132,49 @@ describe('organize checkpoint persistence', () => {
       refineQueue: [{ tabId: 1, windowId: 1, url: 'u', title: 't', urlKey: 'u', contentHash: 'h' }],
     });
     assert.equal(shouldResumeCheckpoint(ancient), false);
+  });
+
+  it('resumes when refine is empty but stack reclassify is still pending', () => {
+    const stacksPending = createOrganizeCheckpoint({
+      jobId: 'reorg-stacks',
+      phase: JOB_PHASES.REFINE,
+      reorganize: true,
+      refineQueue: [
+        { tabId: 1, windowId: 1, url: 'u', title: 't', urlKey: 'u', contentHash: 'h' },
+      ],
+      refineIndex: 1, // all tabs classified
+      stacksDone: false,
+      processedStackIds: ['s1', 's2'],
+    });
+    assert.equal(remainingRefineItems(stacksPending).length, 0);
+    assert.deepEqual(stacksPending.processedStackIds, ['s1', 's2']);
+    assert.equal(shouldResumeCheckpoint(stacksPending), true);
+
+    const stacksDone = createOrganizeCheckpoint({
+      ...stacksPending,
+      stacksDone: true,
+    });
+    assert.equal(shouldResumeCheckpoint(stacksDone), false);
+  });
+
+  it('keeps stacks-pending resume alive via updatedAt despite old startedAt', () => {
+    const now = Date.now();
+    const staleStart = createOrganizeCheckpoint({
+      jobId: 'reorg-long',
+      phase: JOB_PHASES.INTERRUPTED,
+      reorganize: true,
+      refineQueue: [],
+      stacksDone: false,
+      processedStackIds: ['s1'],
+      startedAt: now - ORGANIZE_RESUME_MAX_AGE_MS - 60_000,
+      updatedAt: now - 5_000,
+    });
+    assert.equal(shouldResumeCheckpoint(staleStart, now), true);
+
+    const idleTooLong = createOrganizeCheckpoint({
+      ...staleStart,
+      updatedAt: now - ORGANIZE_RESUME_MAX_AGE_MS - 1,
+    });
+    assert.equal(shouldResumeCheckpoint(idleTooLong, now), false);
   });
 });
