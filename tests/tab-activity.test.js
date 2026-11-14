@@ -93,6 +93,49 @@ describe('dedupe protectActiveTabId', () => {
       [2],
     );
   });
+
+  it('does not close pinned or audible peers when protect overrides keep', () => {
+    const plans = planAutoCloseOlder(
+      [
+        {
+          id: 1,
+          url: 'https://dup.test/media',
+          lastAccessed: 10,
+          active: true,
+          windowId: 1,
+        },
+        {
+          id: 2,
+          url: 'https://dup.test/media',
+          lastAccessed: 9999,
+          active: true,
+          audible: true,
+          windowId: 2,
+        },
+        {
+          id: 3,
+          url: 'https://dup.test/media',
+          lastAccessed: 50,
+          pinned: true,
+          windowId: 3,
+        },
+        {
+          id: 4,
+          url: 'https://dup.test/media',
+          lastAccessed: 20,
+          windowId: 3,
+        },
+      ],
+      { protectActiveTabId: 1 },
+    );
+    assert.equal(plans.length, 1);
+    assert.equal(plans[0].keep.id, 1);
+    // Ordinary duplicate closes; audible + pinned stay open.
+    assert.deepEqual(
+      plans[0].close.map((t) => t.id).sort(),
+      [4],
+    );
+  });
 });
 
 describe('maybeReclaim + tabActivity (switch-to-grouped regression)', () => {
