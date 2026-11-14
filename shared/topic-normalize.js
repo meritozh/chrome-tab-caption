@@ -1,5 +1,5 @@
 /**
- * Domain topic labels (zh seeds OK) + synonym merge (ADR §5.2 / Decisions #4).
+ * English domain topic labels + synonym merge (ADR §5.2 / Decisions #4).
  * Heuristic normalize; LLM may suggest synonyms that collapse into one normalizedKey.
  */
 
@@ -11,7 +11,7 @@
  */
 
 /**
- * Normalize a topic label into a stable key (letters/digits, incl. CJK).
+ * Normalize a topic label into a stable key (letters/digits).
  * @param {string | undefined | null} label
  * @returns {string}
  */
@@ -27,7 +27,7 @@ export function normalizeTopicKey(label) {
 }
 
 /**
- * Title-case English display labels; preserve CJK / mixed seed taxonomy labels as-is.
+ * Title-case English display labels; keep short acronyms intact.
  * @param {string} label
  * @returns {string}
  */
@@ -36,14 +36,13 @@ export function formatTopicLabel(label) {
     .replace(/\s+/g, ' ')
     .trim();
   if (!cleaned) return 'General';
-  // Seed taxonomy uses Chinese domain labels — do not title-case / mangle them.
-  if (/[\u3400-\u9fff]/.test(cleaned)) return cleaned;
   const small = new Set(['a', 'an', 'the', 'and', 'or', 'of', 'for', 'to', 'in', 'on']);
   return cleaned
     .split(' ')
     .map((word, i) => {
-      // Keep short acronyms (AI, API, ML) intact.
+      // Keep short acronyms (AI, API, ML) and punctuation tokens intact.
       if (/^[A-Z0-9]{2,6}$/.test(word)) return word;
+      if (/^[^A-Za-z0-9]+$/.test(word)) return word;
       const lower = word.toLowerCase();
       if (i > 0 && small.has(lower)) return lower;
       return lower.charAt(0).toUpperCase() + lower.slice(1);

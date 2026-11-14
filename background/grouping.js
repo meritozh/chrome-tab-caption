@@ -363,7 +363,7 @@ export async function groupTabsOnDemand(opts) {
    * Candidates for classify:
    * Organize — existing Chrome groups ∪ seed topics (prefer those, then invent).
    * Reorganize — seed topics only (existing cleared; invent when nothing fits).
-   * Never dump into Other / 其他.
+   * Never dump into Other.
    */
   const configSeedTopics = normalizeSeedTopics(config.seedTopics);
   /** @type {string[]} */

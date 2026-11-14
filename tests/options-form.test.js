@@ -59,13 +59,13 @@ describe('options-form helpers', () => {
 
   it('reads seedTopics textarea as normalized array', () => {
     const root = makeRoot({
-      seedTopics: '视频\n\n购物与生活\n开源 · AI / Agents',
+      seedTopics: 'Video\n\nShopping & Life\nOpen Source · AI / Agents',
     });
     const patch = readConfigForm(root);
     assert.deepEqual(patch.seedTopics, [
-      '视频',
-      '购物与生活',
-      '开源 · AI / Agents',
+      'Video',
+      'Shopping & Life',
+      'Open Source · AI / Agents',
     ]);
   });
 

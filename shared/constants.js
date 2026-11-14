@@ -101,8 +101,9 @@ export const DEFAULT_CONFIG = Object.freeze({
   uiLocale: 'en',
   /**
    * Domain seed topics for classify prompts (editable in Settings).
+   * English labels only (Chrome group titles are English).
    * Organize prefers existing groups ∪ seeds; Reorganize uses seeds + invent.
-   * Never includes Other / 其他 — invent a same-granularity topic when nothing fits.
+   * Never includes Other — invent a same-granularity English topic when nothing fits.
    */
   seedTopics: [...DEFAULT_SEED_TOPICS],
   topicGranularity: 'domain',

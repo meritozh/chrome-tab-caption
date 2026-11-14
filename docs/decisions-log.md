@@ -7,7 +7,7 @@ Canonical product ADR lives in the Project store (`docs/tab-manager-adr.md`). Th
 1. **Group scope** — **Organize merges into one Chrome window** (cross-window `tabs.move` allowed). Classify all eligible tabs (including excess); keep top `maxOpenTabs` by `lastAccessed`; excess → Stacks **with** LLM/cache topics written for later recall grouping. (Revised 2026-11-13; supersedes “logical-only / never cross-window move”.)
 2. **Dedupe** — Auto-close older duplicates for the same normalized URL **including across windows**.
 3. **URL normalize** — Strip hash + tracking params only; keep other query.
-4. **Topics** — Domain buckets from an editable **seed list** (zh labels with English aliases OK) ∪ existing Chrome groups. Prefer candidates; **invent** a same-granularity topic when nothing fits — **never** dump into Other / 其他. Merge synonyms to one `normalizedKey`. (Revised 2026-11-15.)
+4. **Topics** — **English** domain buckets from an editable **seed list** ∪ existing Chrome groups (English titles). Prefer candidates; **invent** a same-granularity English topic when nothing fits — **never** dump into Other. Merge synonyms to one `normalizedKey`. (Revised 2026-11-15.)
 5. **Auto-group** — **Off**. User click only; manual vs extension writes are **latest-wins**; cache syncs on tab updates.
 6. **Reclaim protection** — Exclude unsaved / `beforeunload` risk; never reclaim the focused active tab. **maxOpenTabs excess→Stacks reclaim runs only on user Organize / Reorganize** — not on tab create / activate / remove / maintain alarm / config save. (Revised 2026-11-14.)
 7. **Recall** — Restore saved group metadata from StackRecords; prefer topic cache when merging into the live window.

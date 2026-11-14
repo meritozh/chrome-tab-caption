@@ -1,19 +1,19 @@
 /**
- * Domain seed topic taxonomy (no Other / 其他 catch-all).
+ * Domain seed topic taxonomy (English labels; no Other catch-all).
  * Editable in Settings; wired into Organize / Reorganize classify prompts.
  */
 
-/** Default domain buckets — zh labels OK with English aliases. */
+/** Default domain buckets — English only (Chrome group titles are English). */
 export const DEFAULT_SEED_TOPICS = Object.freeze([
-  '开源 · AI / Agents',
-  '开源 · 前端 / Web',
-  '开源 · 基础设施',
-  '阅读 · AI / Agents',
-  '阅读 · 前端 / Web',
-  '阅读 · 基础设施',
-  '视频',
-  '社交与通讯',
-  '购物与生活',
+  'Open Source · AI / Agents',
+  'Open Source · Frontend / Web',
+  'Open Source · Infrastructure',
+  'Reading · AI / Agents',
+  'Reading · Frontend / Web',
+  'Reading · Infrastructure',
+  'Video',
+  'Social & Messaging',
+  'Shopping & Life',
 ]);
 
 /**

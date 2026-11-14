@@ -116,7 +116,7 @@ export const MESSAGES = {
     'settings.seedTopics': 'Seed topics',
     'settings.seedTopicsPlaceholder': 'One topic per line',
     'settings.seedTopicsHint':
-      'Domain buckets for Organize / Reorganize. Prefer these (plus existing groups on Organize); invent when nothing fits — never Other / 其他.',
+      'English domain buckets for Organize / Reorganize. Prefer these (plus existing groups on Organize); invent an English topic when nothing fits — never Other.',
     'settings.provider': 'Provider',
     'settings.providerSelect': 'Select…',
     'settings.providerAnthropic': 'Anthropic Messages',
@@ -260,7 +260,7 @@ export const MESSAGES = {
     'settings.seedTopics': '种子主题',
     'settings.seedTopicsPlaceholder': '每行一个主题',
     'settings.seedTopicsHint':
-      '整理 / 重新整理的领域桶。优先使用这些（整理时还会优先已有分组）；都不合适时再发明同粒度新主题 — 不要归入「其他」。',
+      '整理 / 重新整理用的英文领域主题。优先使用这些（整理时还会优先已有分组）；都不合适时再发明同粒度英文主题 — 不要归入 Other。',
     'settings.provider': '提供商',
     'settings.providerSelect': '请选择…',
     'settings.providerAnthropic': 'Anthropic Messages',

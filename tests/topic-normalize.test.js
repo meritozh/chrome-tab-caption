@@ -15,18 +15,18 @@ describe('topic normalize + synonym merge', () => {
     assert.equal(normalizeTopicKey("OpenAI's API"), 'openais api');
   });
 
-  it('keeps CJK seed labels distinct in keys', () => {
+  it('keeps English seed labels distinct in keys', () => {
     assert.equal(
-      normalizeTopicKey('开源 · AI / Agents'),
-      '开源 ai agents',
+      normalizeTopicKey('Open Source · AI / Agents'),
+      'open source ai agents',
     );
     assert.equal(
-      normalizeTopicKey('阅读 · AI / Agents'),
-      '阅读 ai agents',
+      normalizeTopicKey('Reading · AI / Agents'),
+      'reading ai agents',
     );
     assert.notEqual(
-      normalizeTopicKey('开源 · AI / Agents'),
-      normalizeTopicKey('阅读 · AI / Agents'),
+      normalizeTopicKey('Open Source · AI / Agents'),
+      normalizeTopicKey('Reading · AI / Agents'),
     );
   });
 
@@ -35,8 +35,11 @@ describe('topic normalize + synonym merge', () => {
     assert.equal(formatTopicLabel('guides for react'), 'Guides for React');
   });
 
-  it('preserves CJK seed labels and English acronyms', () => {
-    assert.equal(formatTopicLabel('开源 · AI / Agents'), '开源 · AI / Agents');
+  it('preserves acronyms in English seed-style labels', () => {
+    assert.equal(
+      formatTopicLabel('Open Source · AI / Agents'),
+      'Open Source · AI / Agents',
+    );
     assert.equal(formatTopicLabel('AI Agents'), 'AI Agents');
   });
 
