@@ -408,11 +408,6 @@ function endAdoptedAlarmResumeUi() {
     setOrganizeStatus('organize.incomplete');
   }
   setOrganizeIdle();
-  sendToBackground(MSG.GET_LOGICAL_TOPICS)
-    .then((res) => {
-      if (Array.isArray(res?.logical)) renderLogicalTopics(res.logical);
-    })
-    .catch(() => {});
 }
 
 /**
@@ -663,9 +658,6 @@ async function startOrganizeJob(mode = 'organize') {
           classified: lastClassified,
         }),
       );
-      if (Array.isArray(res.logical) && res.logical.length) {
-        renderLogicalTopics(res.logical);
-      }
     }
     return;
   }
@@ -679,9 +671,6 @@ async function startOrganizeJob(mode = 'organize') {
         classified: lastClassified,
       }),
     );
-    if (Array.isArray(res.logical) && res.logical.length) {
-      renderLogicalTopics(res.logical);
-    }
     setOrganizeIdle();
     return;
   }
@@ -709,9 +698,6 @@ async function startOrganizeJob(mode = 'organize') {
           ? { raw: String(res.error) }
           : { key: 'organize.stacksPaused', params: null },
       );
-      if (Array.isArray(res.logical) && res.logical.length) {
-        renderLogicalTopics(res.logical);
-      }
       if (reorganize) refreshStacks();
     } else {
       setOrganizeStatus(
@@ -738,7 +724,6 @@ async function startOrganizeJob(mode = 'organize') {
         : '',
     classified: res.classified ?? 0,
   });
-  renderLogicalTopics(res.logical || []);
   // Always refresh stacks after reorganize (topics may have changed).
   if (reorganize || reclaimed > 0) refreshStacks();
 }
@@ -875,30 +860,6 @@ onBackgroundBroadcast((message) => {
     setOrganizeProgressVisible(false);
   }
 });
-
-function renderLogicalTopics(logical) {
-  const list = document.getElementById('topics-list');
-  if (!list) return;
-  if (!logical.length) {
-    list.innerHTML = `<li class="sp-muted">${escapeHtml(tt('topics.empty'))}</li>`;
-    return;
-  }
-  list.innerHTML = logical
-    .map((topic) => {
-      const label = escapeHtml(topic.label || topic.topicKey);
-      const tabs = topic.tabIds?.length ?? 0;
-      const windows = escapeHtml((topic.windowIds || []).join(', ') || '—');
-      return `<li><strong>${label}</strong>${escapeHtml(
-        tt('topics.meta', { tabs, windows: '«W»' }),
-      ).replace('«W»', windows)}</li>`;
-    })
-    .join('');
-}
-
-async function refreshLogicalTopics() {
-  const res = await sendToBackground(MSG.GET_LOGICAL_TOPICS).catch(() => null);
-  renderLogicalTopics(res?.logical ?? []);
-}
 
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
@@ -1554,7 +1515,6 @@ if (organizeStatus && !organizeConfigReady) {
 localeSelect?.addEventListener('change', () => {
   applyLocale(localeSelect.value, { persist: true });
   // Re-render dynamic lists so empty/help copy matches the new locale.
-  refreshLogicalTopics();
   refreshStacks();
 });
 
@@ -1581,7 +1541,6 @@ chrome.storage?.onChanged?.addListener((changes, area) => {
 });
 
 refreshStacks();
-refreshLogicalTopics();
 void consumeOpenSidePanelViewFlag();
 void refreshCachedOrganizeConfig().then(() => {
   applyLocale(uiLocale);
