@@ -202,6 +202,174 @@ describe('runAutoDedupe', () => {
     assert.equal(tabsApi._tabs.size, 1);
     assert.equal(tabsApi._tabs.has(2), true);
   });
+
+  it('retains unprobed dirty tab when re-plan swaps survivor (issue #10)', async () => {
+    // Tab 1 starts active (survivor) with dirty DOM; tab 2 is the prelim close target.
+    // During tab 2's probe, the user activates tab 2 → re-plan closes tab 1.
+    // Tab 1 must be late-probed and retained, not closed unprobed.
+    const { tabsApi, windowsApi } = makeChromeApis([
+      {
+        id: 1,
+        windowId: 1,
+        url: 'https://form.test/edit',
+        title: 'Form',
+        lastAccessed: 10,
+        active: true,
+      },
+      {
+        id: 2,
+        windowId: 1,
+        url: 'https://form.test/edit',
+        title: 'Form',
+        lastAccessed: 5,
+        active: false,
+      },
+    ]);
+    /** @type {number[]} */
+    const probed = [];
+    const scriptingApi = {
+      async executeScript({ target }) {
+        const tabId = target.tabId;
+        probed.push(tabId);
+        if (tabId === 2) {
+          for (const t of tabsApi._tabs.values()) {
+            t.active = t.id === 2;
+          }
+        }
+        // Tab 1 has unsaved form state; tab 2 is clean.
+        return [{ result: tabId === 1 }];
+      },
+    };
+
+    const result = await runAutoDedupe({
+      config: { autoDedupeEnabled: true, dedupeMode: 'auto-close-older' },
+      closingTabIds: new Set(),
+      tabsApi,
+      windowsApi,
+      scriptingApi,
+      broadcast: false,
+      probeUnload: true,
+    });
+
+    assert.equal(result.closed, 0);
+    assert.equal(tabsApi._tabs.size, 2);
+    assert.ok(probed.includes(2), 'prelim close target probed');
+    assert.ok(probed.includes(1), 're-planned close target late-probed');
+  });
+
+  it('probes and closes a clean duplicate that appears during probe await', async () => {
+    const { tabsApi, windowsApi } = makeChromeApis([
+      {
+        id: 1,
+        windowId: 1,
+        url: 'https://newdup.test/',
+        title: 'A',
+        lastAccessed: 10,
+        active: true,
+      },
+      {
+        id: 2,
+        windowId: 1,
+        url: 'https://newdup.test/',
+        title: 'A',
+        lastAccessed: 5,
+        active: false,
+      },
+    ]);
+    /** @type {number[]} */
+    const probed = [];
+    const scriptingApi = {
+      async executeScript({ target }) {
+        const tabId = target.tabId;
+        probed.push(tabId);
+        if (tabId === 2 && !tabsApi._tabs.has(3)) {
+          tabsApi._tabs.set(3, {
+            id: 3,
+            windowId: 1,
+            url: 'https://newdup.test/',
+            title: 'A',
+            lastAccessed: 1,
+            active: false,
+          });
+        }
+        return [{ result: false }];
+      },
+    };
+
+    const result = await runAutoDedupe({
+      config: { autoDedupeEnabled: true, dedupeMode: 'auto-close-older' },
+      closingTabIds: new Set(),
+      tabsApi,
+      windowsApi,
+      scriptingApi,
+      broadcast: false,
+      probeUnload: true,
+    });
+
+    assert.ok(probed.includes(2));
+    assert.ok(probed.includes(3), 'newly appeared close target late-probed');
+    assert.equal(result.closed, 2);
+    assert.equal(tabsApi._tabs.has(1), true);
+    assert.equal(tabsApi._tabs.has(2), false);
+    assert.equal(tabsApi._tabs.has(3), false);
+  });
+
+  it('retains a dirty duplicate that appears during probe await', async () => {
+    const { tabsApi, windowsApi } = makeChromeApis([
+      {
+        id: 1,
+        windowId: 1,
+        url: 'https://dirtynew.test/',
+        title: 'A',
+        lastAccessed: 10,
+        active: true,
+      },
+      {
+        id: 2,
+        windowId: 1,
+        url: 'https://dirtynew.test/',
+        title: 'A',
+        lastAccessed: 5,
+        active: false,
+      },
+    ]);
+    /** @type {number[]} */
+    const probed = [];
+    const scriptingApi = {
+      async executeScript({ target }) {
+        const tabId = target.tabId;
+        probed.push(tabId);
+        if (tabId === 2 && !tabsApi._tabs.has(3)) {
+          tabsApi._tabs.set(3, {
+            id: 3,
+            windowId: 1,
+            url: 'https://dirtynew.test/',
+            title: 'A',
+            lastAccessed: 1,
+            active: false,
+          });
+        }
+        // Only the newly appeared tab is dirty.
+        return [{ result: tabId === 3 }];
+      },
+    };
+
+    const result = await runAutoDedupe({
+      config: { autoDedupeEnabled: true, dedupeMode: 'auto-close-older' },
+      closingTabIds: new Set(),
+      tabsApi,
+      windowsApi,
+      scriptingApi,
+      broadcast: false,
+      probeUnload: true,
+    });
+
+    assert.ok(probed.includes(3), 'newly appeared dirty tab late-probed');
+    assert.equal(result.closed, 1);
+    assert.equal(tabsApi._tabs.has(1), true);
+    assert.equal(tabsApi._tabs.has(2), false);
+    assert.equal(tabsApi._tabs.has(3), true);
+  });
 });
 
 describe('dedupe before reclaim', () => {
