@@ -248,9 +248,10 @@ let cachedOrganizeConfig = {
 
 /**
  * @param {Record<string, unknown> | null | undefined} config
+ * @returns {boolean} true when a config object was applied
  */
 function rememberOrganizeConfig(config) {
-  if (!config || typeof config !== 'object') return;
+  if (!config || typeof config !== 'object') return false;
   const apiKey = config.apiKey;
   cachedOrganizeConfig = {
     llmProvider: typeof config.llmProvider === 'string' ? config.llmProvider : '',
@@ -261,6 +262,7 @@ function rememberOrganizeConfig(config) {
     ),
     contentExtractionEnabled: config.contentExtractionEnabled !== false,
   };
+  return true;
 }
 
 /**
@@ -303,6 +305,7 @@ async function hydrateOrganizeConfigFromStorage() {
 
 /**
  * Prefer local storage; fall back to SW GET_CONFIG if storage hydrate fails.
+ * Only marks ready when a real config object was remembered (ok:false → retry).
  * @returns {Promise<typeof cachedOrganizeConfig>}
  */
 function refreshCachedOrganizeConfig() {
@@ -310,9 +313,13 @@ function refreshCachedOrganizeConfig() {
     if (ok) return cachedOrganizeConfig;
     try {
       const res = await sendToBackground(MSG.GET_CONFIG);
-      rememberOrganizeConfig(res?.config);
-      organizeConfigReady = true;
-      organizeConfigLoadFailed = false;
+      if (rememberOrganizeConfig(res?.config)) {
+        organizeConfigReady = true;
+        organizeConfigLoadFailed = false;
+      } else {
+        organizeConfigReady = false;
+        organizeConfigLoadFailed = true;
+      }
       syncOrganizeEnabled();
     } catch {
       organizeConfigReady = false;
@@ -332,9 +339,15 @@ organizeBtn?.addEventListener('click', async () => {
   // Recoverable path when boot hydrate failed: refetch, then ask for a second click
   // so permissions.request can still be the first await of a fresh user gesture.
   if (!organizeConfigReady) {
+    const runId = (organizeRunId = nextOrganizeRunId());
+    // Non-idle phase so Cancel does not take the idle/alarm path mid-retry.
+    organizePhase = 'permissions';
     setBusy(true);
     organizeStatus.textContent = 'Loading settings…';
     await refreshCachedOrganizeConfig();
+    // Superseded (Cancel or a newer Organize) — do not clear the active run's UI.
+    if (runId !== organizeRunId) return;
+    if (organizeBusy || organizePhase !== 'permissions') return;
     setOrganizeIdle();
     if (!organizeConfigReady) {
       organizeStatus.textContent =
