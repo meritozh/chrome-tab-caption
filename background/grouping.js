@@ -48,6 +48,8 @@ import {
 import { canSpendLlmCall } from '../shared/metrics.js';
 import { finalizeSingleWindowOrganize } from './window-merge.js';
 import { persistStackRecords } from '../shared/stack-records.js';
+import { resolveFocusedActiveTabId } from './focused-tab.js';
+import { collapseTabGroupsExceptActive } from './collapse-groups.js';
 
 /**
  * @typedef {import('../shared/topic-cache.js').TopicCacheLru} TopicCacheLru
@@ -1142,6 +1144,21 @@ export async function groupTabsOnDemand(opts) {
   await emitCheckpoint(onCheckpoint, snapshotCheckpoint(JOB_PHASES.APPLYING, { total }));
   collapseHeuristicSynonyms(assignments, topicRegistry);
 
+  // Capture focused tab before merge/group so we can restore it and collapse
+  // every group except the one that ends up containing it.
+  /** @type {number | undefined} */
+  let focusedTabIdBeforeApply;
+  try {
+    const liveTabs = await chrome.tabs.query({});
+    focusedTabIdBeforeApply = await resolveFocusedActiveTabId(
+      liveTabs,
+      chrome.tabs,
+      chrome.windows,
+    );
+  } catch {
+    focusedTabIdBeforeApply = undefined;
+  }
+
   /** @type {Record<string, unknown> | null} */
   let merge = null;
   let finalAssignments = assignments;
@@ -1197,6 +1214,32 @@ export async function groupTabsOnDemand(opts) {
   } else {
     const plans = planPhysicalGroups(assignments);
     physical = await applyPhysicalGroups(plans);
+  }
+
+  // Collapse all groups except the focused tab's group (Reorganize shares this path).
+  /** @type {Awaited<ReturnType<typeof collapseTabGroupsExceptActive>> | null} */
+  let collapse = null;
+  try {
+    collapse = await collapseTabGroupsExceptActive({
+      activeTabId: focusedTabIdBeforeApply,
+    });
+    if (collapse.errors?.length) {
+      physical = {
+        ...physical,
+        errors: [...(physical.errors || []), ...collapse.errors],
+      };
+    }
+  } catch (err) {
+    physical = {
+      ...physical,
+      errors: [
+        ...(physical.errors || []),
+        `collapse groups: ${err?.message || err}`,
+      ],
+    };
+  }
+  if (collapse) {
+    physical = { ...physical, collapse };
   }
 
   const logical = buildLogicalTopicViews(finalAssignments);
