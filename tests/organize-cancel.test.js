@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {
   formatOrganizeCancelMessage,
   isIdleOrganizeCancel,
-  isPreviewOnlyCancel,
   organizeCancelCheckpoint,
   shouldApplyOrganizeCompletion,
   shouldApplySettingsRetryCompletion,
@@ -59,12 +58,6 @@ describe('isIdleOrganizeCancel', () => {
     assert.equal(isIdleOrganizeCancel('permissions'), false);
     assert.equal(isIdleOrganizeCancel('running'), false);
     assert.equal(isIdleOrganizeCancel('cancelling'), false);
-  });
-
-  it('keeps deprecated isPreviewOnlyCancel alias for idle/preview', () => {
-    assert.equal(isPreviewOnlyCancel('idle'), true);
-    assert.equal(isPreviewOnlyCancel('preview'), true);
-    assert.equal(isPreviewOnlyCancel('permissions'), false);
   });
 });
 

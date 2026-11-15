@@ -74,15 +74,6 @@ export function isIdleOrganizeCancel(phase) {
 }
 
 /**
- * @deprecated Use isIdleOrganizeCancel — privacy preview Confirm was removed.
- * @param {string} phase
- * @returns {boolean}
- */
-export function isPreviewOnlyCancel(phase) {
-  return isIdleOrganizeCancel(phase) || phase === 'preview';
-}
-
-/**
  * Cooperative checkpoint for groupTabsOnDemand.
  * Pass a factory for `state` so expensive fields (e.g. logical views) are built only on abort.
  * @param {AbortSignal | null | undefined} signal

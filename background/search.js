@@ -9,15 +9,7 @@ import {
   documentFromTab,
   documentFromStack,
 } from '../shared/fuzzy-search.js';
-import { SKIP_URL_PREFIXES } from '../shared/constants.js';
-
-/**
- * @param {string | undefined} url
- */
-function isSkippableUrl(url) {
-  if (!url) return true;
-  return SKIP_URL_PREFIXES.some((p) => url.startsWith(p));
-}
+import { isSkippableUrl } from '../shared/tab-eligibility.js';
 
 /**
  * Resolve cached topicLabel for a url without mutating LRU order.
@@ -35,17 +27,7 @@ async function resolveTopicMeta(topicCache, url, title) {
     excerpt: '',
     url: urlKey,
   });
-  const exact = topicCache.peek?.(urlKey, contentHash);
-  if (exact?.topicLabel) {
-    return { topicLabel: exact.topicLabel, topicKey: exact.topicKey };
-  }
-
-  /** @type {import('../shared/topic-cache.js').CacheEntry | null} */
-  let best = null;
-  for (const entry of topicCache.entries()) {
-    if (entry.urlKey !== urlKey) continue;
-    if (!best || (entry.lastHitAt ?? 0) > (best.lastHitAt ?? 0)) best = entry;
-  }
+  const best = topicCache.peekBestForUrl?.(urlKey, contentHash);
   if (best?.topicLabel) {
     return { topicLabel: best.topicLabel, topicKey: best.topicKey };
   }

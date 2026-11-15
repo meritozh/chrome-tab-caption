@@ -5,7 +5,7 @@
  * Reclaim closes mark closingTabIds (suppressClosed — don't pollute user recall lists).
  */
 
-import { MSG, TAB_GROUP_ID_NONE } from '../shared/constants.js';
+import { TAB_GROUP_ID_NONE } from '../shared/constants.js';
 import { resolveTopicCacheSize } from '../shared/config.js';
 import {
   createStackRecord,
@@ -22,17 +22,14 @@ import { normalizeUrlKey, computeContentHash } from '../shared/url-normalize.js'
 import { colorForTopicKey } from '../shared/physical-groups.js';
 import { suppressClosedRemove } from '../shared/suppress-closed.js';
 import { probeBeforeUnloadRisk } from '../shared/beforeunload-probe.js';
+import { broadcastStacksOverflow } from '../shared/messages.js';
 import { runAutoDedupe } from './dedupe.js';
 import { resolveFocusedActiveTabId } from './focused-tab.js';
-
-export { resolveFocusedActiveTabId };
 
 /**
  * @typedef {import('../shared/stack-records.js').StackRecordStore} StackRecordStore
  * @typedef {import('../shared/topic-cache.js').TopicCacheLru} TopicCacheLru
  */
-
-export { probeBeforeUnloadRisk };
 
 /**
  * Resolve topic + live group metadata for a tab about to be reclaimed.
@@ -62,20 +59,10 @@ export async function resolveStackMetadata(tab, topicCache) {
         excerpt: '',
         url: urlKey,
       });
-      const exact = topicCache.peek?.(urlKey, contentHash);
-      if (exact?.topicKey) {
-        meta.topicKey = exact.topicKey;
-        meta.topicLabel = exact.topicLabel || exact.topicKey;
-      } else {
-        let best = null;
-        for (const entry of topicCache.entries()) {
-          if (entry.urlKey !== urlKey) continue;
-          if (!best || (entry.lastHitAt ?? 0) > (best.lastHitAt ?? 0)) best = entry;
-        }
-        if (best?.topicKey) {
-          meta.topicKey = best.topicKey;
-          meta.topicLabel = best.topicLabel || best.topicKey;
-        }
+      const best = topicCache.peekBestForUrl?.(urlKey, contentHash);
+      if (best?.topicKey) {
+        meta.topicKey = best.topicKey;
+        meta.topicLabel = best.topicLabel || best.topicKey;
       }
     }
   }
@@ -142,18 +129,6 @@ export async function restoreGroupMetadata(tabId, windowId, meta) {
     return { restored: true, groupId, title };
   } catch (err) {
     return { restored: false, error: String(err?.message || err) };
-  }
-}
-
-/**
- * Broadcast overflow warning to Side Panel (fail-soft).
- * @param {Record<string, unknown>} payload
- */
-function broadcastOverflow(payload) {
-  try {
-    chrome.runtime.sendMessage({ type: MSG.STACKS_OVERFLOW_WARN, ...payload }).catch(() => {});
-  } catch {
-    // no listeners
   }
 }
 
@@ -270,7 +245,7 @@ export async function maybeReclaim(opts) {
       reason: capacity.reason === 'partial' ? 'partial' : 'at_capacity',
     });
     await opts.setOverflowPending?.(pending);
-    broadcastOverflow(pending);
+    broadcastStacksOverflow(pending);
     return { reclaimed: 0, overflow: true, overflowPending: pending, stub: false, dedupe };
   }
 
@@ -305,7 +280,7 @@ export async function maybeReclaim(opts) {
         reason: 'at_capacity',
       });
       await opts.setOverflowPending?.(pending);
-      broadcastOverflow(pending);
+      broadcastStacksOverflow(pending);
       break;
     }
 
@@ -333,7 +308,7 @@ export async function maybeReclaim(opts) {
       reason: capacity.reason === 'partial' ? 'partial' : 'at_capacity',
     });
     await opts.setOverflowPending?.(pending);
-    broadcastOverflow(pending);
+    broadcastStacksOverflow(pending);
     return {
       reclaimed,
       overflow: true,
@@ -346,9 +321,6 @@ export async function maybeReclaim(opts) {
 
   return { reclaimed, errors, stub: false, dedupe };
 }
-
-/** Re-export for tests / callers that imported from stacks. */
-export { suppressClosedRemove };
 
 function excessCap(openCount, maxOpenTabs) {
   return Math.max(0, openCount - maxOpenTabs);

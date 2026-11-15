@@ -27,4 +27,25 @@ describe('TopicCacheLru', () => {
     assert.equal(cache.size, 0);
     assert.equal(cache.lookup('a', '1'), null);
   });
+
+  it('peekBestForUrl prefers exact hash then newest for urlKey', () => {
+    const cache = new TopicCacheLru(10);
+    cache.upsert({
+      urlKey: 'https://a/',
+      contentHash: 'old',
+      topicKey: 't-old',
+      topicLabel: 'Old',
+    });
+    cache.upsert({
+      urlKey: 'https://a/',
+      contentHash: 'new',
+      topicKey: 't-new',
+      topicLabel: 'New',
+    });
+    const exact = cache.peekBestForUrl('https://a/', 'old');
+    assert.equal(exact?.topicKey, 't-old');
+    const fallback = cache.peekBestForUrl('https://a/', 'missing');
+    assert.equal(fallback?.topicKey, 't-new');
+    assert.equal(cache.peekBestForUrl('', 'x'), null);
+  });
 });

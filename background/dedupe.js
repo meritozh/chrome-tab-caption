@@ -7,7 +7,6 @@
  * Serialized via dedupeGate so scheduleDedupe + reclaim cannot race closes.
  */
 
-import { MSG } from '../shared/constants.js';
 import { planAutoCloseOlder } from '../shared/dedupe-match.js';
 import { suppressClosedRemove } from '../shared/suppress-closed.js';
 import { probeBeforeUnloadRisk } from '../shared/beforeunload-probe.js';
@@ -26,7 +25,6 @@ let dedupeGate = Promise.resolve();
  * @param {typeof chrome.windows} [opts.windowsApi]
  * @param {typeof chrome.scripting} [opts.scriptingApi]
  * @param {{ push: (e: object) => object }} [opts.activityLog]
- * @param {boolean} [opts.broadcast]
  * @param {boolean} [opts.probeUnload]
  * @returns {Promise<{ closed: number, kept: number, groups: number, stub: false, skipped?: string, errors?: string[] }>}
  */
@@ -60,7 +58,6 @@ async function runAutoDedupeUnlocked(opts = {}) {
   const scriptingApi =
     (opts instanceof Set ? undefined : opts.scriptingApi) ?? globalThis.chrome?.scripting;
   const activityLog = opts instanceof Set ? undefined : opts.activityLog;
-  const broadcast = opts instanceof Set ? true : opts.broadcast !== false;
   const probeUnload = opts instanceof Set ? true : opts.probeUnload !== false;
 
   if (!closingTabIds) {
@@ -263,10 +260,7 @@ async function runAutoDedupeUnlocked(opts = {}) {
           closedWindowId: stillDupAfter.dupWindowId ?? dup.windowId,
         },
       };
-      const logged = activityLog?.push?.(entry);
-      if (broadcast) {
-        broadcastActivity(logged || { ...entry, at: Date.now() });
-      }
+      activityLog?.push?.(entry);
     }
   }
 
@@ -330,18 +324,5 @@ async function activateSurvivor(keepId, windowId, tabsApi, windowsApi) {
     return { ok: true };
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
-  }
-}
-
-/**
- * @param {object} entry
- */
-function broadcastActivity(entry) {
-  try {
-    chrome.runtime
-      .sendMessage({ type: MSG.ACTIVITY_LOG, entry })
-      .catch(() => {});
-  } catch {
-    // no listeners / chrome unavailable
   }
 }

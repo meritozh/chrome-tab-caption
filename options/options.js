@@ -4,11 +4,6 @@
  */
 
 import { SESSION_KEYS } from '../shared/constants.js';
-import {
-  API_KEY_REDACTED,
-  fillConfigForm,
-  readConfigForm,
-} from '../shared/options-form.js';
 
 const statusEl = document.getElementById('redirect-status');
 const openBtn = document.getElementById('btn-open-settings');
@@ -58,6 +53,3 @@ openBtn?.addEventListener('click', () => {
 
 // Best-effort auto-open when Chrome navigates here from “Extension options”.
 void openSidePanelSettings();
-
-// Re-exports keep older imports/tests stable if they pointed at options.js.
-export { fillConfigForm as fillForm, readConfigForm as readForm, API_KEY_REDACTED };

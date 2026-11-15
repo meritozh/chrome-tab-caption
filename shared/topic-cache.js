@@ -61,6 +61,26 @@ export class TopicCacheLru {
   }
 
   /**
+   * Prefer exact contentHash peek; else newest entry for urlKey (no LRU mutate).
+   * @param {string} urlKey
+   * @param {string} contentHash
+   * @returns {CacheEntry | null}
+   */
+  peekBestForUrl(urlKey, contentHash) {
+    if (!urlKey) return null;
+    const exact = this.peek(urlKey, contentHash);
+    if (exact) return exact;
+    /** @type {CacheEntry | null} */
+    let best = null;
+    for (const entry of this.entries()) {
+      if (entry.urlKey !== urlKey) continue;
+      // Prefer higher lastHitAt; on ties keep later LRU order (newer).
+      if (!best || (entry.lastHitAt ?? 0) >= (best.lastHitAt ?? 0)) best = entry;
+    }
+    return best;
+  }
+
+  /**
    * @param {string} urlKey
    * @param {string} contentHash
    * @returns {CacheEntry | null}
