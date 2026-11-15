@@ -33,8 +33,35 @@ export function keepGroupIdFromTab(tab) {
 }
 
 /**
+ * Load a live tab by id, or null if it is gone.
+ * @param {number} tabId
+ * @param {typeof chrome.tabs} tabsApi
+ * @returns {Promise<chrome.tabs.Tab | null>}
+ */
+async function getLiveTab(tabId, tabsApi) {
+  if (!tabsApi?.get || typeof tabId !== 'number') return null;
+  try {
+    return await tabsApi.get(tabId);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the focused window's active tab id (fresh query).
+ * @param {typeof chrome.tabs} [tabsApi]
+ * @param {typeof chrome.windows} [windowsApi]
+ * @returns {Promise<number | undefined>}
+ */
+async function resolveLiveFocusedTabId(tabsApi, windowsApi) {
+  const tabs = tabsApi?.query ? await tabsApi.query({}) : [];
+  return resolveFocusedActiveTabId(tabs, tabsApi, windowsApi);
+}
+
+/**
  * Ensure `activeTabId` stays the focused window's active tab, then collapse
- * all tabGroups in its window except its group (or all if ungrouped).
+ * all tabGroups in its window except its group (or all in that window if
+ * ungrouped). If the captured tab is gone, re-resolve the focused active tab.
  *
  * @param {object} [opts]
  * @param {number} [opts.activeTabId] — captured before merge/group so focus can be restored
@@ -44,6 +71,7 @@ export function keepGroupIdFromTab(tab) {
  * @returns {Promise<{
  *   activeTabId: number | undefined,
  *   keepGroupId: number | null,
+ *   windowId: number | undefined,
  *   collapsed: number,
  *   expanded: number,
  *   errors: string[],
@@ -62,40 +90,42 @@ export async function collapseTabGroupsExceptActive(opts = {}) {
   let activeTabId =
     typeof opts.activeTabId === 'number' ? opts.activeTabId : undefined;
 
-  if (typeof activeTabId !== 'number') {
-    try {
-      const tabs = tabsApi?.query ? await tabsApi.query({}) : [];
-      activeTabId = await resolveFocusedActiveTabId(tabs, tabsApi, windowsApi);
-    } catch (err) {
-      errors.push(`resolve active: ${err?.message || err}`);
+  /** @type {chrome.tabs.Tab | null} */
+  let activeTab = null;
+
+  if (typeof activeTabId === 'number') {
+    activeTab = await getLiveTab(activeTabId, tabsApi);
+    if (!activeTab) {
+      // Captured tab closed during merge/reclaim — fall back to current focus.
+      errors.push(`captured tab ${activeTabId} missing — re-resolving focus`);
+      activeTabId = undefined;
     }
   }
 
-  /** @type {chrome.tabs.Tab | null} */
-  let activeTab = null;
-  if (typeof activeTabId === 'number' && tabsApi?.get) {
+  if (!activeTab) {
     try {
-      activeTab = await tabsApi.get(activeTabId);
-      // Restore focus if merge / group APIs left another tab active.
-      if (activeTab && activeTab.active !== true && tabsApi.update) {
-        try {
-          activeTab = await tabsApi.update(activeTabId, { active: true });
-        } catch (err) {
-          errors.push(`restore active: ${err?.message || err}`);
-        }
-      }
-      // Refresh groupId after restore (group apply may have just assigned it).
-      if (tabsApi.get) {
-        try {
-          activeTab = await tabsApi.get(activeTabId);
-        } catch {
-          // keep prior snapshot
-        }
-      }
+      activeTabId = await resolveLiveFocusedTabId(tabsApi, windowsApi);
     } catch (err) {
-      errors.push(`get active tab: ${err?.message || err}`);
-      activeTab = null;
+      errors.push(`resolve active: ${err?.message || err}`);
+      activeTabId = undefined;
     }
+    if (typeof activeTabId === 'number') {
+      activeTab = await getLiveTab(activeTabId, tabsApi);
+    }
+  }
+
+  if (activeTab && typeof activeTabId === 'number') {
+    // Restore focus if merge / group APIs left another tab active.
+    if (activeTab.active !== true && tabsApi?.update) {
+      try {
+        activeTab = await tabsApi.update(activeTabId, { active: true });
+      } catch (err) {
+        errors.push(`restore active: ${err?.message || err}`);
+      }
+    }
+    // Refresh groupId after restore (group apply may have just assigned it).
+    const refreshed = await getLiveTab(activeTabId, tabsApi);
+    if (refreshed) activeTab = refreshed;
   }
 
   const keepGroupId = keepGroupIdFromTab(activeTab);
@@ -106,22 +136,33 @@ export async function collapseTabGroupsExceptActive(opts = {}) {
     return {
       activeTabId,
       keepGroupId,
+      windowId,
       collapsed,
       expanded,
       errors: [...errors, 'tabGroups API unavailable'],
     };
   }
 
+  // Never query all windows without a resolved focused window — that would
+  // collapse every group across the browser when the captured tab is gone.
+  if (typeof windowId !== 'number') {
+    return {
+      activeTabId,
+      keepGroupId,
+      windowId,
+      collapsed,
+      expanded,
+      errors: [...errors, 'no focused window to collapse'],
+    };
+  }
+
   /** @type {chrome.tabGroups.TabGroup[]} */
   let groups = [];
   try {
-    groups =
-      typeof windowId === 'number'
-        ? await tabGroupsApi.query({ windowId })
-        : await tabGroupsApi.query({});
+    groups = await tabGroupsApi.query({ windowId });
   } catch (err) {
     errors.push(`tabGroups.query: ${err?.message || err}`);
-    return { activeTabId, keepGroupId, collapsed, expanded, errors };
+    return { activeTabId, keepGroupId, windowId, collapsed, expanded, errors };
   }
 
   for (const group of groups) {
@@ -142,5 +183,5 @@ export async function collapseTabGroupsExceptActive(opts = {}) {
     }
   }
 
-  return { activeTabId, keepGroupId, collapsed, expanded, errors };
+  return { activeTabId, keepGroupId, windowId, collapsed, expanded, errors };
 }

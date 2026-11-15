@@ -204,4 +204,47 @@ describe('collapseTabGroupsExceptActive', () => {
     assert.equal(api.tabGroupsApi._map.get(10).collapsed, false);
     assert.ok(result.errors.some((e) => e.includes('20') && e.includes('gone')));
   });
+
+  it('re-resolves focus when captured tab is gone; scopes to that window only', async () => {
+    const api = makeApis({
+      focusedWindowId: 1,
+      tabs: [
+        // Captured id 99 is absent from the map (closed during reclaim).
+        { id: 2, windowId: 1, active: true, groupId: 10 },
+        { id: 3, windowId: 1, active: false, groupId: 20 },
+        { id: 4, windowId: 2, active: true, groupId: 30 },
+        { id: 5, windowId: 2, active: false, groupId: 40 },
+      ],
+      groups: [
+        { id: 10, windowId: 1, title: 'Keep', collapsed: true },
+        { id: 20, windowId: 1, title: 'Collapse', collapsed: false },
+        { id: 30, windowId: 2, title: 'OtherWinA', collapsed: false },
+        { id: 40, windowId: 2, title: 'OtherWinB', collapsed: false },
+      ],
+    });
+
+    const result = await collapseTabGroupsExceptActive({
+      activeTabId: 99,
+      tabsApi: api.tabsApi,
+      windowsApi: api.windowsApi,
+      tabGroupsApi: api.tabGroupsApi,
+    });
+
+    assert.equal(result.activeTabId, 2);
+    assert.equal(result.keepGroupId, 10);
+    assert.equal(result.windowId, 1);
+    assert.equal(api.tabGroupsApi._map.get(10).collapsed, false);
+    assert.equal(api.tabGroupsApi._map.get(20).collapsed, true);
+    // Other window must be untouched.
+    assert.equal(api.tabGroupsApi._map.get(30).collapsed, false);
+    assert.equal(api.tabGroupsApi._map.get(40).collapsed, false);
+    assert.equal(result.expanded, 1);
+    assert.equal(result.collapsed, 1);
+    assert.ok(result.errors.some((e) => e.includes('99') && e.includes('missing')));
+    // Only window-1 groups were updated.
+    assert.deepEqual(
+      api.tabGroupsApi._updates.map((u) => u.id).sort((a, b) => a - b),
+      [10, 20],
+    );
+  });
 });
