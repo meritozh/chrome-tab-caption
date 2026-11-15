@@ -338,12 +338,6 @@ body {
   margin-bottom: 0.5rem;
 }
 
-.sp-label {
-  font-size: 0.78rem;
-  font-weight: 550;
-  color: var(--muted);
-}
-
 select,
 input[type="search"],
 input[type="text"],
@@ -486,15 +480,6 @@ select:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.sp-link {
-  display: inline-flex;
-  margin-top: 0.35rem;
-  color: var(--accent-11);
-  font-weight: 650;
-  text-decoration: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--accent-9) 40%, transparent);
 }
 
 .sp-settings-section {

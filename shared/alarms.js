@@ -46,22 +46,8 @@ export async function clearOrganizeResumeAlarm(alarms = globalThis.chrome?.alarm
 }
 
 /**
- * @deprecated maxOpenTabs reclaim is Organize-only — do not create this alarm.
- * Kept for tests that assert the legacy name / create path.
- * @param {typeof chrome.alarms | undefined} alarms
- */
-export async function ensureMaintainAlarm(alarms = globalThis.chrome?.alarms) {
-  if (!alarms?.create) return false;
-  try {
-    await alarms.create(ALARM_NAMES.MAINTAIN, { periodInMinutes: 1 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Clear the legacy maintain/reclaim alarm (idempotent).
+ * Old installs may still have this alarm; SW clears it on start.
  * @param {typeof chrome.alarms | undefined} alarms
  */
 export async function clearMaintainAlarm(alarms = globalThis.chrome?.alarms) {

@@ -28,4 +28,23 @@ export function onBackgroundBroadcast(handler) {
   return () => chrome.runtime.onMessage.removeListener(listener);
 }
 
-export { MSG };
+/**
+ * Fail-soft broadcast to open extension pages (Side Panel, etc.).
+ * @param {string} type
+ * @param {Record<string, unknown>} [payload]
+ */
+export function broadcastToUi(type, payload = {}) {
+  try {
+    chrome.runtime.sendMessage({ type, ...payload }).catch(() => {});
+  } catch {
+    // no listeners / chrome unavailable
+  }
+}
+
+/**
+ * Stacks overflow warn → Side Panel (fail-soft).
+ * @param {Record<string, unknown>} payload
+ */
+export function broadcastStacksOverflow(payload) {
+  broadcastToUi(MSG.STACKS_OVERFLOW_WARN, payload);
+}

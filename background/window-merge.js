@@ -5,7 +5,6 @@
  * Fail-soft on move/close failures.
  */
 
-import { MSG } from '../shared/constants.js';
 import { resolveTopicCacheSize } from '../shared/config.js';
 import { createStackRecord, persistStackRecords } from '../shared/stack-records.js';
 import {
@@ -16,6 +15,7 @@ import {
 import { suppressClosedRemove } from '../shared/suppress-closed.js';
 import { probeBeforeUnloadRisk } from '../shared/beforeunload-probe.js';
 import { colorForTopicKey } from '../shared/physical-groups.js';
+import { broadcastStacksOverflow } from '../shared/messages.js';
 import {
   partitionKeepAndReclaim,
   selectTargetWindowId,
@@ -26,18 +26,6 @@ import {
 import { resolveStackMetadata } from './stacks.js';
 import { resolveFocusedActiveTabId } from './focused-tab.js';
 import { runAutoDedupe } from './dedupe.js';
-
-/**
- * Broadcast overflow warning (fail-soft).
- * @param {Record<string, unknown>} payload
- */
-function broadcastOverflow(payload) {
-  try {
-    chrome.runtime.sendMessage({ type: MSG.STACKS_OVERFLOW_WARN, ...payload }).catch(() => {});
-  } catch {
-    // no listeners
-  }
-}
 
 /**
  * Move tabs into target window (cross-window allowed). Fail-soft per batch/tab.
@@ -282,7 +270,7 @@ export async function finalizeSingleWindowOrganize(opts) {
           reason: capacity.reason === 'partial' ? 'partial' : 'at_capacity',
         });
         await opts.setOverflowPending?.(pending);
-        broadcastOverflow(pending);
+        broadcastStacksOverflow(pending);
         summary.overflow = true;
         summary.overflowPending = pending;
       } else {
@@ -324,7 +312,7 @@ export async function finalizeSingleWindowOrganize(opts) {
               reason: 'at_capacity',
             });
             await opts.setOverflowPending?.(pending);
-            broadcastOverflow(pending);
+            broadcastStacksOverflow(pending);
             summary.overflow = true;
             summary.overflowPending = pending;
             break;
@@ -353,7 +341,7 @@ export async function finalizeSingleWindowOrganize(opts) {
             reason: capacity.reason === 'partial' ? 'partial' : 'at_capacity',
           });
           await opts.setOverflowPending?.(pending);
-          broadcastOverflow(pending);
+          broadcastStacksOverflow(pending);
           summary.overflow = true;
           summary.overflowPending = pending;
         }

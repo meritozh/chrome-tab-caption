@@ -9,14 +9,11 @@ import { DEFAULT_SEED_TOPICS } from './seed-topics.js';
 
 export { DEFAULT_SEED_TOPICS };
 
-export const EXTENSION_ID = 'chrome-tab-caption';
-
 /** chrome.storage.local partition keys */
 export const STORAGE_KEYS = Object.freeze({
   CONFIG: 'config',
   TOPIC_CACHE: 'topicCache',
   STACK_RECORDS: 'stackRecords',
-  SEARCH_INDEX: 'searchIndex',
   /** Local-only counters (ADR Phase 7) — never synced / never sent off-device. */
   METRICS: 'metrics',
 });
@@ -25,7 +22,6 @@ export const STORAGE_KEYS = Object.freeze({
 export const SESSION_KEYS = Object.freeze({
   RUNTIME: 'runtime',
   CLOSING_TAB_IDS: 'closingTabIds',
-  LAST_ORGANIZE: 'lastOrganize',
   STACKS_OVERFLOW_PENDING: 'stacksOverflowPending',
   /** Persisted Organize checkpoint for alarm resume (ADR Phase 7). */
   ORGANIZE_CHECKPOINT: 'organizeCheckpoint',
@@ -43,7 +39,6 @@ export const MSG = Object.freeze({
   /** Clear topic cache, reclassify open tabs + Stacks, then organize (bypass cache). */
   REORGANIZE_TABS: 'REORGANIZE_TABS',
   PREVIEW_CLASSIFY_PAYLOAD: 'PREVIEW_CLASSIFY_PAYLOAD',
-  PREVIEW_GROUP_PAYLOAD: 'PREVIEW_GROUP_PAYLOAD',
   SEARCH_QUERY: 'SEARCH_QUERY',
   ACTIVATE_TAB: 'ACTIVATE_TAB',
   RECALL_STACK: 'RECALL_STACK',
@@ -52,8 +47,6 @@ export const MSG = Object.freeze({
   SET_CONFIG: 'SET_CONFIG',
   TEST_LLM: 'TEST_LLM',
   GET_STACKS: 'GET_STACKS',
-  GET_ACTIVITY_LOG: 'GET_ACTIVITY_LOG',
-  GET_LOGICAL_TOPICS: 'GET_LOGICAL_TOPICS',
   CANCEL_GROUP: 'CANCEL_GROUP',
   GET_JOB_STATE: 'GET_JOB_STATE',
   GET_METRICS: 'GET_METRICS',
@@ -62,7 +55,6 @@ export const MSG = Object.freeze({
   GROUP_PROGRESS: 'GROUP_PROGRESS',
   JOB_STATE: 'JOB_STATE',
   STACKS_OVERFLOW_WARN: 'STACKS_OVERFLOW_WARN',
-  ACTIVITY_LOG: 'ACTIVITY_LOG',
   CONFIG_UPDATED: 'CONFIG_UPDATED',
 });
 

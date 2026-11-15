@@ -30,10 +30,7 @@ import { StackRecordStore, loadStackRecords, persistStackRecords } from '../shar
 import { normalizeUrlKey, computeContentHash } from '../shared/url-normalize.js';
 import { isEligibleTab } from '../shared/tab-eligibility.js';
 import { createActivityLog } from '../shared/activity-log.js';
-import {
-  buildGroupPayloadPreview,
-  groupTabsOnDemand,
-} from './grouping.js';
+import { groupTabsOnDemand } from './grouping.js';
 import { formatOrganizeCancelMessage } from '../shared/organize-cancel.js';
 import { runSearchQuery } from './search.js';
 import { maybeReclaim, recallStack, exportOrDiscardStacks } from './stacks.js';
@@ -71,9 +68,6 @@ let localMetrics = mergeMetrics(null);
 let organizeCheckpoint = null;
 /** Prevent overlapping resume / organize jobs. */
 let organizeResumeInFlight = false;
-
-/** @type {{ logical: import('../shared/physical-groups.js').PhysicalGroupPlan[] | unknown[], latestWinsAt: number, source: string } | null} */
-let lastOrganizeState = null;
 
 /** Runtime: tabs we are closing (dedupe/reclaim) — suppressClosed recall pollution. */
 /** @type {Set<number>} */
@@ -264,21 +258,12 @@ async function hydrateFromStorage() {
   } catch {
     // migration is best-effort / storage may be unavailable in tests
   }
-  // Restore logical topics across SW restarts (session-scoped).
+  // Restore overflow / organize checkpoint across SW restarts (session-scoped).
   try {
     const stored = await chrome.storage.session.get([
-      SESSION_KEYS.LAST_ORGANIZE,
       SESSION_KEYS.STACKS_OVERFLOW_PENDING,
       SESSION_KEYS.ORGANIZE_CHECKPOINT,
     ]);
-    const last = stored?.[SESSION_KEYS.LAST_ORGANIZE];
-    if (last && Array.isArray(last.logical)) {
-      lastOrganizeState = {
-        logical: last.logical,
-        latestWinsAt: last.latestWinsAt ?? null,
-        latestWinsSource: last.latestWinsSource ?? last.source ?? null,
-      };
-    }
     const pending = stored?.[SESSION_KEYS.STACKS_OVERFLOW_PENDING];
     overflowPending =
       pending && typeof pending === 'object' && pending.needsUserAction ? pending : null;
@@ -477,15 +462,6 @@ async function maybeResumeOrganizeFromCheckpoint() {
       bypassCache: cp.bypassCache === true || cp.reorganize === true,
       reclassifyStacks: cp.reclassifyStacks === true || cp.reorganize === true,
     });
-    if (result?.ok) {
-      await rememberOrganizeState(result);
-    } else if (result?.cancelled && Array.isArray(result.logical) && result.logical.length) {
-      await rememberOrganizeState({
-        logical: result.logical,
-        latestWinsAt: Date.now(),
-        latestWinsSource: 'extension-organize-cancelled',
-      });
-    }
     scheduleReclaimAfterOrganize(result);
     return result;
   } finally {
@@ -507,29 +483,6 @@ async function setOverflowPending(pending) {
     } else {
       await chrome.storage.session.remove(SESSION_KEYS.STACKS_OVERFLOW_PENDING);
     }
-  } catch {
-    // session storage may be unavailable in tests
-  }
-}
-
-/**
- * Persist latest-wins organize result (full logical views) in session.
- * @param {Record<string, unknown>} state
- */
-async function rememberOrganizeState(state) {
-  lastOrganizeState = {
-    logical: Array.isArray(state.logical) ? state.logical : [],
-    latestWinsAt: state.latestWinsAt ?? Date.now(),
-    latestWinsSource: state.latestWinsSource ?? 'extension-organize',
-  };
-  try {
-    await chrome.storage.session.set({
-      [SESSION_KEYS.LAST_ORGANIZE]: {
-        logical: lastOrganizeState.logical,
-        latestWinsAt: lastOrganizeState.latestWinsAt,
-        latestWinsSource: lastOrganizeState.latestWinsSource,
-      },
-    });
   } catch {
     // session storage may be unavailable in tests
   }
@@ -656,7 +609,7 @@ function scheduleReclaimAfterOrganize(result) {
 /**
  * Debounced maxOpenTabs reclaim — **Organize follow-up only**.
  * Must not be called from tab create/activate/remove/alarm/config
- * (see shouldRunBrowseTimeReclaim in shared/organize-reclaim.js).
+ * (browse-time / alarm / overflow-export must never call maybeReclaim).
  * Reclaim always runs dedupe first (ADR order).
  */
 function scheduleReclaim() {
@@ -781,18 +734,6 @@ function onMessage(message, sender, sendResponse) {
             endpointBaseUrl: config.endpointBaseUrl,
           },
         );
-        sendResponse({ ok: true, preview });
-        break;
-      }
-      case MSG.PREVIEW_GROUP_PAYLOAD: {
-        const config = await loadConfig();
-        const currentWindowId = await resolveCurrentWindowId(message, sender);
-        const preview = await buildGroupPayloadPreview({
-          scope: message.scope === 'current' ? 'current' : 'all',
-          currentWindowId,
-          topicCache,
-          config,
-        });
         sendResponse({ ok: true, preview });
         break;
       }
@@ -939,29 +880,8 @@ function onMessage(message, sender, sendResponse) {
           }
           if (clientRunId != null) cancelledClientRunIds.delete(clientRunId);
         }
-        if (result.ok) {
-          await rememberOrganizeState(result);
-        } else if (result.cancelled && Array.isArray(result.logical) && result.logical.length) {
-          // Keep partial logical topics from work completed before cancel.
-          await rememberOrganizeState({
-            logical: result.logical,
-            latestWinsAt: Date.now(),
-            latestWinsSource: reorganize
-              ? 'extension-reorganize-cancelled'
-              : 'extension-organize-cancelled',
-          });
-        }
         scheduleReclaimAfterOrganize(result);
         sendResponse(result);
-        break;
-      }
-      case MSG.GET_LOGICAL_TOPICS: {
-        sendResponse({
-          ok: true,
-          logical: lastOrganizeState?.logical ?? [],
-          latestWinsAt: lastOrganizeState?.latestWinsAt ?? null,
-          source: lastOrganizeState?.latestWinsSource ?? null,
-        });
         break;
       }
       case MSG.SEARCH_QUERY: {
@@ -1099,10 +1019,6 @@ function onMessage(message, sender, sendResponse) {
             error: `LLM connection failed: ${err?.message || err}`,
           });
         }
-        break;
-      }
-      case MSG.GET_ACTIVITY_LOG: {
-        sendResponse({ ok: true, entries: activityLog.list(), stub: false });
         break;
       }
       case MSG.GET_JOB_STATE: {
@@ -1248,20 +1164,3 @@ try {
 // Eager init for SW cold start
 initPanelBehavior();
 ensureHydrated();
-
-// Export for tests / future modules (not used by Chrome loader)
-export {
-  closingTabIds,
-  activityLog,
-  tabActivity,
-  topicCache,
-  stackStore,
-  MSG,
-  SESSION_KEYS,
-  STORAGE_KEYS,
-  ensureHydrated,
-  scheduleDedupe,
-  runDedupePass,
-  scheduleReclaim,
-  runReclaimPass,
-};

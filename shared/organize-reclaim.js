@@ -20,11 +20,3 @@ export function shouldScheduleReclaimAfterOrganize(result) {
   if (result.stacksPending || result.timeout) return false;
   return true;
 }
-
-/**
- * Browse-time / alarm / config / overflow-export must not enforce maxOpenTabs.
- * Kept as an explicit gate for callers and regression tests.
- */
-export function shouldRunBrowseTimeReclaim() {
-  return false;
-}

@@ -22,7 +22,6 @@ import {
 import { isSingleWindowMergeScope } from '../shared/window-merge.js';
 import { mergeTopicResult, heuristicTopicsAreSynonyms } from '../shared/topic-normalize.js';
 import {
-  buildClassifyPayloadPreview,
   createLlmClient,
   isLlmConfigured,
   LLM_CONFIG_REQUIRED_MESSAGE,
@@ -130,77 +129,6 @@ export async function queryTabsForScope(scope, currentWindowId) {
     return chrome.tabs.query({ windowId });
   }
   return chrome.tabs.query({});
-}
-
-/**
- * Build privacy preview for an organize pass (no LLM calls).
- * @param {object} opts
- * @param {'all' | 'current'} [opts.scope]
- * @param {number} [opts.currentWindowId]
- * @param {TopicCacheLru} opts.topicCache
- * @param {Record<string, unknown>} opts.config
- */
-export async function buildGroupPayloadPreview(opts) {
-  const scope = opts.scope === 'current' ? 'current' : 'all';
-  const tabs = filterEligibleTabs(await queryTabsForScope(scope, opts.currentWindowId));
-  const config = opts.config;
-  const samples = [];
-  let cacheHits = 0;
-  let cacheMisses = 0;
-
-  for (const tab of tabs) {
-    const urlKey = normalizeUrlKey(tab.url || '');
-    const contentHash = await computeContentHash({
-      title: tab.title || '',
-      excerpt: '',
-      url: urlKey,
-    });
-    const hit = urlKey ? opts.topicCache.peek(urlKey, contentHash) : null;
-    if (hit) cacheHits += 1;
-    else cacheMisses += 1;
-
-    if (samples.length < 5) {
-      const preview = buildClassifyPayloadPreview(
-        {
-          url: tab.url || '',
-          title: tab.title || '',
-          snippet: '',
-          extractedText: '',
-        },
-        {
-          provider: /** @type {any} */ (config.llmProvider || ''),
-          model: /** @type {string} */ (config.model || ''),
-          endpointBaseUrl: /** @type {string} */ (config.endpointBaseUrl || ''),
-        },
-      );
-      samples.push({
-        tabId: tab.id,
-        windowId: tab.windowId,
-        cacheStatus: hit ? 'hit' : 'miss',
-        topicLabel: hit?.topicLabel || null,
-        fields: preview.fields,
-      });
-    }
-  }
-
-  return {
-    scope,
-    eligibleCount: tabs.length,
-    cacheHits,
-    cacheMisses,
-    fieldsTemplate: [
-      'url',
-      'title',
-      'snippet',
-      'extractedText',
-      'provider',
-      'model',
-      'endpointBaseUrl',
-    ],
-    note: 'API key is never shown. Cache misses are classified on Organize (no confirm step).',
-    samples,
-    privacyShowFieldsPreview: true,
-  };
 }
 
 /**

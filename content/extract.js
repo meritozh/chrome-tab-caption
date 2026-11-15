@@ -33,25 +33,6 @@ export function callInjectedExtract(opts) {
 }
 
 /**
- * Best-effort landmark sketch kept for tests / environments without Readability files.
- * Prefer extractTabContent (full pipeline) in production.
- * @param {number} [cap]
- * @returns {{ title: string, excerpt: string, source: 'stub' }}
- */
-export function extractPageExcerpt(cap = EXCERPT_HARD_CAP_CHARS) {
-  const title = typeof document !== 'undefined' ? document.title || '' : '';
-  let text = '';
-  if (typeof document !== 'undefined') {
-    const root =
-      document.querySelector('article, main, [role="main"]') || document.body;
-    text = (root?.innerText || root?.textContent || '').replace(/\s+/g, ' ').trim();
-  }
-  const excerpt =
-    text.length <= cap ? text : text.slice(0, Math.max(0, cap - 1)).trimEnd() + '…';
-  return { title, excerpt, source: 'stub' };
-}
-
-/**
  * @param {unknown} first
  * @param {{ title: string, url: string }} base
  * @param {{ excerptCap: number, bufferCap: number }} caps

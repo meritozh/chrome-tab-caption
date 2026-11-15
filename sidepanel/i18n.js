@@ -18,11 +18,6 @@ export const MESSAGES = {
     'locale.zh': '中文',
 
     'organize.heading': 'Organize',
-    'organize.lede':
-      'One click classifies tabs, keeps the newest open, and merges into one window.',
-    'organize.scope': 'Scope',
-    'organize.scopeAll': 'All windows → single window',
-    'organize.scopeCurrent': 'Current window only',
     'organize.btn': 'Organize tabs',
     'organize.reorganize': 'Reorganize',
     'organize.cancel': 'Cancel',
@@ -41,7 +36,6 @@ export const MESSAGES = {
     'organize.busy': 'Organizing…',
     'organize.reorganizing': 'Reorganizing…',
     'organize.cancelling': 'Cancelling…',
-    'organize.ended': 'Organize ended.',
     'organize.incomplete':
       'Organize stopped before grouping finished. Run Organize again if needed.',
     'organize.stacksPaused':
@@ -58,10 +52,7 @@ export const MESSAGES = {
     'organize.calls': 'calls',
     'organize.classifiedNote': ' ({n} classified before cancel)',
 
-    'search.heading': 'Search',
-    'search.help': 'Fuzzy + pinyin over open tabs and Stacks. ↑↓ then Enter.',
     'search.placeholder': 'Title, URL, topic (pinyin OK)',
-    'search.emptyPrompt': 'Type to search Open tabs and Stacked records.',
     'search.noMatches': 'No matches for “{query}”.',
     'search.error': 'Search error: {msg}',
     'search.open': 'Open',
@@ -77,8 +68,6 @@ export const MESSAGES = {
     'search.aria': 'Search open tabs and stacks',
 
     'stacks.heading': 'Stacks',
-    'stacks.help':
-      'Tabs this extension reclaimed (not browser recently-closed). Recall restores topic groups.',
     'stacks.empty': 'No stacked tabs yet — excess from Organize lands here.',
     'stacks.overflowTitle': 'Stack archive full',
     'stacks.export': 'Export oldest & free space',
@@ -165,10 +154,6 @@ export const MESSAGES = {
     'locale.zh': '中文',
 
     'organize.heading': '整理',
-    'organize.lede': '一键分类标签页，保留最近使用的，并合并到一个窗口。',
-    'organize.scope': '范围',
-    'organize.scopeAll': '所有窗口 → 单个窗口',
-    'organize.scopeCurrent': '仅当前窗口',
     'organize.btn': '整理标签页',
     'organize.reorganize': '重新整理',
     'organize.cancel': '取消',
@@ -183,7 +168,6 @@ export const MESSAGES = {
     'organize.busy': '正在整理…',
     'organize.reorganizing': '正在重新整理…',
     'organize.cancelling': '正在取消…',
-    'organize.ended': '整理已结束。',
     'organize.incomplete': '整理在分组完成前已停止。如需继续请再次运行整理。',
     'organize.stacksPaused': '已暂停 — 堆栈重新分类将自动继续…',
     'organize.done':
@@ -198,10 +182,7 @@ export const MESSAGES = {
     'organize.calls': '调用',
     'organize.classifiedNote': '（取消前已分类 {n}）',
 
-    'search.heading': '搜索',
-    'search.help': '对打开标签页与堆栈进行模糊 / 拼音搜索。↑↓ 后按 Enter。',
     'search.placeholder': '标题、URL、主题（支持拼音）',
-    'search.emptyPrompt': '输入以搜索打开的标签页与堆栈记录。',
     'search.noMatches': '没有与“{query}”匹配的结果。',
     'search.error': '搜索错误：{msg}',
     'search.open': '打开中',
@@ -217,7 +198,6 @@ export const MESSAGES = {
     'search.aria': '搜索打开的标签页与堆栈',
 
     'stacks.heading': '堆栈',
-    'stacks.help': '由本扩展回收的标签页（非浏览器最近关闭）。召回可恢复主题分组。',
     'stacks.empty': '尚无堆栈标签页 — 整理多余的标签页会进入此处。',
     'stacks.overflowTitle': '堆栈归档已满',
     'stacks.export': '导出最旧并腾出空间',
@@ -356,11 +336,6 @@ export function applyDomI18n(root = document, locale = 'en') {
     const key = el.getAttribute('data-i18n');
     if (!key) return;
     el.textContent = t(loc, key);
-  });
-  root.querySelectorAll('[data-i18n-html]').forEach((el) => {
-    const key = el.getAttribute('data-i18n-html');
-    if (!key) return;
-    el.innerHTML = t(loc, key);
   });
   root.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
     const key = el.getAttribute('data-i18n-placeholder');
